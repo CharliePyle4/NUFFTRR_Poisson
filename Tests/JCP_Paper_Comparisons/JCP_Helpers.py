@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import sympy as sp
 from IPython.display import display
+import time
 
 from Poisson_Solver.grids import (
     generate_uniform_radial,
@@ -33,6 +34,24 @@ def get_problem_functions(u_sym, x, y):
     g_neumann = lambda x_val, y_val, R_val: (u_x(x_val, y_val) * x_val + u_y(x_val, y_val) * y_val) / R_val
 
     return u, f, g_dirichlet, g_neumann
+
+def problem_5_setup():
+    x, y = sp.symbols('x y')
+    # Test Problem 5: Highly oscillatory function
+    u_sym = sp.sin(10 * sp.pi * x) * sp.cos(10 * sp.pi * y)
+    return get_problem_functions(u_sym, x, y)
+
+def problem_6_setup():
+    x, y = sp.symbols('x y')
+    # Test Problem 6: Sharp boundary layer / Gaussian peak
+    u_sym = sp.exp(-50 * ((x - 0.5)**2 + y**2))
+    return get_problem_functions(u_sym, x, y)
+
+def problem_7_setup():
+    x, y = sp.symbols('x y')
+    # Test Problem 7: Off-center singularity (logarithmic)
+    u_sym = sp.log((x - 1.1)**2 + (y + 1.1)**2)
+    return get_problem_functions(u_sym, x, y)
 
 def get_cached_angle_mesh(method_cfg, N, M):
     azu_unif = method_cfg["azu_unif"]
@@ -100,6 +119,7 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         u_fourier_0 = np.array([])
 
     try:
+        start_time = time.perf_counter()
         u_approx = poisson_solver(
             f_values, g_values, u_fourier_0,
             N, M, iRadius, iAngle, R,
@@ -109,6 +129,7 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
             maxiter_nufft=50,
             tol_nufft=1e-8,
         )
+        solve_time = time.perf_counter() - start_time
 
         _, linf_rel, _, l2_rel = compute_error_metrics(
             u_approx, u_true, iRadius, iAngle
@@ -117,6 +138,7 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
     except MemoryError:
         linf_rel = np.nan
         l2_rel = np.nan
+        solve_time = np.nan
 
     return {
         "method": method_cfg["name"],
@@ -127,6 +149,7 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         "quad": quad_name,
         "L_inf_rel": linf_rel,
         "L2_rel": l2_rel,
+        "time": solve_time,
     }
 
 def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
@@ -162,9 +185,12 @@ def display_results(df_table1, df_table2, methods, N_values, M_values):
         name = method["name"]
         print(f"\n{'='*80}\n{method['label']} : TABLE 1\n{'='*80}")
         display(df_table1[df_table1["method"] == name].pivot(index="N", columns="M", values="L_inf_rel").reindex(index=N_values, columns=M_values).map(dash_if_nan))
+        print(f"\n{'='*80}\n{method['label']} : TABLE 1 (Timing)\n{'='*80}")
+        display(df_table1[df_table1["method"] == name].pivot(index="N", columns="M", values="time").reindex(index=N_values, columns=M_values).map(dash_if_nan))
         print(f"\n{'='*80}\n{method['label']} : TABLE 2\n{'='*80}")
         df2 = df_table2[df_table2["method"] == name]
         display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")[m] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel"]}, axis=1).reindex(M_values).map(dash_if_nan))
+        display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")[m] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel", "time"]}, axis=1).reindex(M_values).map(dash_if_nan))
 
 def display_table_varying_M(df_table, methods, M_values, title="TABLE"):
     def dash_if_nan(x):
@@ -174,3 +200,50 @@ def display_table_varying_M(df_table, methods, M_values, title="TABLE"):
         print(f"\n{'='*80}\n{method['label']} : {title}\n{'='*80}")
         df2 = df_table[df_table["method"] == name]
         display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")[m] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel"]}, axis=1).reindex(M_values).map(dash_if_nan))
+
+def setup_problem_5(alpha=5):
+    x, y = sp.symbols('x y')
+    u_sym = sp.sin(alpha * sp.pi * (x + y))
+    return get_problem_functions(u_sym, x, y)
+
+def setup_problem_6():
+    x, y = sp.symbols('x y')
+    phi_x = sp.exp(-100 * (x - 0.5)**2) * (x**2 - x)
+    phi_y = sp.exp(-100 * (y - 0.5)**2) * (y**2 - y)
+    u_sym = 10 * phi_x * phi_y
+    return get_problem_functions(u_sym, x, y)
+
+def setup_problem_7():
+    # Generic setup pattern for Problem 7
+    x, y = sp.symbols('x y')
+    u_sym = sp.cos(10 * sp.pi * x) * sp.cos(10 * sp.pi * y)
+    return get_problem_functions(u_sym, x, y)
+
+def run_timing_analysis(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+    timing_results = []
+    for method in methods:
+        for N in N_values:
+            for M in M_values:
+                res = run_single_case(
+                    N=N, M=M, method_cfg=method, bc_name="dirichlet", quad_name="trapezoidal",
+                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                )
+                timing_results.append({
+                    "method": method["name"],
+                    "label": method["label"],
+                    "N": N,
+                    "M": M,
+                    "time": res.get("time", np.nan)
+                })
+    return pd.DataFrame(timing_results)
+
+def display_timing_results(df_timing, methods, N_values, M_values):
+    def dash_if_nan(x):
+        return "—" if pd.isna(x) else f"{x:.4f} s"
+
+    for method in methods:
+        name = method["name"]
+        print(f"\n{'='*80}\n{method['label']} : TIMING VS (N, M)\n{'='*80}")
+        df2 = df_timing[df_timing["method"] == name]
+        display(df2.pivot(index="N", columns="M", values="time").reindex(index=N_values, columns=M_values).map(dash_if_nan))
+        display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")[m] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel", "time"]}, axis=1).reindex(M_values).map(dash_if_nan))
