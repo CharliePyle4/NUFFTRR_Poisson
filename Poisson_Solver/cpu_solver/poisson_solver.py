@@ -10,7 +10,7 @@ from .fourier.fourier import (
     
 )
 
-from .Radial.radial import (
+from .radial.radial import (
     compute_v_neg_pos,
     combine_v_neg_pos_to_v,
     compute_radial_integrals
