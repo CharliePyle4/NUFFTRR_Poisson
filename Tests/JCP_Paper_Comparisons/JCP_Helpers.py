@@ -47,7 +47,7 @@ def problem_6_setup():
     u_sym = sp.exp(-50 * ((x - 0.5)**2 + y**2))
     return get_problem_functions(u_sym, x, y)
 
-def problem_7_setup():
+def setup_problem_7():
     x, y = sp.symbols('x y')
     # Test Problem 7: Off-center singularity (logarithmic)
     u_sym = sp.log((x - 1.1)**2 + (y + 1.1)**2)
@@ -151,6 +151,39 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         "L2_rel": l2_rel,
         "time": solve_time,
     }
+
+def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+    bc_choice = BC_MAP[bc_name]
+    quad_rule = QUAD_MAP[quad_name]
+
+    azu_unif = method_cfg["azu_unif"]
+    use_nudft = method_cfg.get("use_nudft", False)
+
+    iRadius = build_radial_mesh(M, rad_unif, R)
+    iAngle  = get_cached_angle_mesh(method_cfg, N, M)
+
+    x_coord, y_coord = generate_cartesian_grid_on_disk(iAngle, iRadius)
+
+    f_values = generate_grid_values(f, x_coord, y_coord)
+    u_true   = generate_grid_values(u, x_coord, y_coord)
+
+    if bc_choice == 1:
+        g_values = generate_grid_values(g_dirichlet, x_coord[:, M - 1], y_coord[:, M - 1])
+    elif bc_choice == 2:
+        g_values = generate_grid_values(lambda x_val, y_val: g_neumann(x_val, y_val, R), x_coord[:, M - 1], y_coord[:, M - 1])
+
+    u_fourier_0 = u_true.mean(axis=0) if bc_choice == 2 else np.array([])
+
+    u_approx = poisson_solver(
+        f_values, g_values, u_fourier_0,
+        N, M, iRadius, iAngle, R,
+        quad_rule, bc_choice,
+        rad_unif, azu_unif,
+        use_nudft_angular=use_nudft,
+        maxiter_nufft=50,
+        tol_nufft=1e-8,
+    )
+    return x_coord, y_coord, u_approx, u_true
 
 def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
     table1_results = []

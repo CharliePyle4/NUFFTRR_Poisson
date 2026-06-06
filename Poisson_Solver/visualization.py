@@ -8,7 +8,7 @@ the (x, y) domain of the disk.
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_on_disk(x_coord: np.ndarray, y_coord: np.ndarray, u: np.ndarray) -> None:
+def plot_on_disk(x_coord: np.ndarray, y_coord: np.ndarray, u: np.ndarray, title: str = "Solution on Disk") -> None:
     """
     Plot a 2D solution u(x, y) defined on a polar grid mapped to cartesian coordinates as a
     3D surface plot.
@@ -43,7 +43,7 @@ def plot_on_disk(x_coord: np.ndarray, y_coord: np.ndarray, u: np.ndarray) -> Non
     fig = plt.figure()
     ax = fig.add_subplot(111, projection="3d")
     ax.plot_surface(x_coord, y_coord, u, cmap="cool")
-    ax.set_title("Solution on Disk")
+    ax.set_title(title)
     plt.show()
 
 
