@@ -1,3 +1,5 @@
+import numpy as np
+
 def nonuniform_simps_rule(x: np.ndarray, f: np.ndarray) -> float:
     """
     Approximate the definite integral over [x[0], x[2]] of a function sampled

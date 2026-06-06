@@ -1,3 +1,12 @@
+import numpy as np
+import finufft
+
+from .uniform import compute_fourier_coeff_unif
+from .nonuniform import (
+    compute_fourier_coeff_nonunif,
+    compute_fourier_coeff_nonunif_perradius,
+    _wrap_angles
+)
 
 #-----------------------------------------
 # Analysis dispatcher
@@ -234,5 +243,3 @@ def compute_u_fourier_coefficients(v: np.ndarray,
         u_fourier_coeff[mask, :] = v[mask, :] + B
 
     return u_fourier_coeff
-
-

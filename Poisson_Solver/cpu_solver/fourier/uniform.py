@@ -1,3 +1,6 @@
+import numpy as np
+from .nonuniform import _is_matrix
+
 # ---------------------------------------------------------
 # Fourier Coefficient Computation — uniform (azu_unif == 2)
 # ---------------------------------------------------------

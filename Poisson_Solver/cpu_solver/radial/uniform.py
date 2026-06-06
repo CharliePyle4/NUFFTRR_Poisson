@@ -1,4 +1,6 @@
 
+import numpy as np
+
 def compute_C_D_uniform(
     r_m: np.ndarray, f_fourier_coeff: np.ndarray, quad_rule: int
 ):

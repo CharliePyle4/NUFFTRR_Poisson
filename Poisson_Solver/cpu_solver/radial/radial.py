@@ -1,5 +1,8 @@
 import numpy as np
 
+from .uniform import compute_C_D_uniform
+from .nonuniform import compute_C_D_nonuniform
+
 def compute_radial_integrals(r_m: np.ndarray,
                              f_fourier_coeff: np.ndarray,
                              quad_rule: int,
@@ -150,7 +153,3 @@ def combine_v_neg_pos_to_v(v_neg: np.ndarray,
     v[mir_idx, :] = np.conj(v[pos_idx, :])
 
     return v
-
-
-
-
