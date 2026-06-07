@@ -51,11 +51,15 @@ def g_neumann(x, y):
 # ---------------------------------------------------------
 # Core Test Execution
 # ---------------------------------------------------------
-def run_comparison_case(N, M, bc_choice=1, quad_rule=1, mute=False):
+def run_comparison_case(N, M, bc_choice=1, quad_rule=1, rad_unif=1, mute=False):
     # Contents from helpers.py's run_comparison_case
     azu_unif = 2 
-    rad_unif = 1
-    iRadius_np = generate_uniform_radial(M, R)
+    if rad_unif == 1:
+        iRadius_np = generate_uniform_radial(M, R)
+    else:
+        # Default nonuniform grid is 'sqrt' mapping
+        iRadius_np = generate_nonuniform_radial(M, R, mapping='sqrt')
+
     iAngle_np = generate_uniform_azimuthal(N)
     x_coord_np, y_coord_np = generate_cartesian_grid_on_disk(iAngle_np, iRadius_np)
     f_values_np = generate_grid_values(f_rhs, x_coord_np, y_coord_np)
@@ -92,7 +96,7 @@ def run_comparison_case(N, M, bc_choice=1, quad_rule=1, mute=False):
         if not mute: print(f"  !! GPU ERROR N={N} M={M}: {e}")
         runtime_gpu, l2_rel_gpu = np.nan, np.nan
     runtime_diff = runtime_cpu - runtime_gpu if np.isfinite(runtime_cpu) and np.isfinite(runtime_gpu) else np.nan
-    return dict(N=N, M=M, bc=bc_choice, quad=quad_rule, L2_rel_cpu=l2_rel_cpu, runtime_cpu=runtime_cpu, L2_rel_gpu=l2_rel_gpu, runtime_gpu=runtime_gpu, accuracy_diff=abs(l2_rel_cpu - l2_rel_gpu) if np.isfinite(l2_rel_cpu) and np.isfinite(l2_rel_gpu) else np.nan, speedup=runtime_cpu / runtime_gpu if runtime_gpu > 0 and np.isfinite(runtime_cpu) and np.isfinite(runtime_gpu) else np.nan, runtime_diff=runtime_diff)
+    return dict(N=N, M=M, bc=bc_choice, quad=quad_rule, rad_unif=rad_unif, L2_rel_cpu=l2_rel_cpu, runtime_cpu=runtime_cpu, L2_rel_gpu=l2_rel_gpu, runtime_gpu=runtime_gpu, accuracy_diff=abs(l2_rel_cpu - l2_rel_gpu) if np.isfinite(l2_rel_cpu) and np.isfinite(l2_rel_gpu) else np.nan, speedup=runtime_cpu / runtime_gpu if runtime_gpu > 0 and np.isfinite(runtime_cpu) and np.isfinite(runtime_gpu) else np.nan, runtime_diff=runtime_diff)
 
 # ---------------------------------------------------------
 # Pipeline
@@ -103,7 +107,7 @@ def run_comparison_pipeline(N_values, M_values, test_type="VaryingNM", fixed_val
     if test_type == "VaryingNM":
         for N in N_values:
             for M in M_values:
-                res = run_comparison_case(N, M, mute=mute)
+                res = run_comparison_case(N, M, rad_unif=1, mute=mute)
                 results.append(res)
                 if not mute: print(f"  N={N:4d}, M={M:4d} | Speedup={res['speedup']:.2f}x | Acc. Diff={res['accuracy_diff']:.3e}")
     elif test_type == "VaryingM_BC_Quad":
@@ -111,11 +115,21 @@ def run_comparison_pipeline(N_values, M_values, test_type="VaryingNM", fixed_val
         for M in M_values:
             for quad in [1, 2]:
                 for bc in [1, 2]:
-                    res = run_comparison_case(N, M, bc_choice=bc, quad_rule=quad, mute=mute)
+                    res = run_comparison_case(N, M, bc_choice=bc, quad_rule=quad, rad_unif=1, mute=mute)
                     results.append(res)
                     q_str = "Trap" if quad == 1 else "Simp"
                     bc_str = "Diri" if bc == 1 else "Neum"
                     if not mute: print(f"  N={N}, M={M:4d}, {q_str}, {bc_str} | Speedup={res['speedup']:.2f}x | Acc. Diff={res['accuracy_diff']:.3e}")
+    elif test_type == "VaryingM_BC_Quad_Nonunif":
+        N = fixed_val
+        for M in M_values:
+            for quad in [1, 2]:
+                for bc in [1, 2]:
+                    res = run_comparison_case(N, M, bc_choice=bc, quad_rule=quad, rad_unif=0, mute=mute)
+                    results.append(res)
+                    q_str = "Trap" if quad == 1 else "Simp"
+                    bc_str = "Diri" if bc == 1 else "Neum"
+                    if not mute: print(f"  N={N}, M={M:4d}, {q_str}, {bc_str}, Nonunif | Speedup={res['speedup']:.2f}x | Acc. Diff={res['accuracy_diff']:.3e}")
     return pd.DataFrame(results)
 
 # ---------------------------------------------------------
@@ -148,6 +162,8 @@ def _prepare_table2_df(df):
     df = df.copy()
     df['quad_str'] = df['quad'].map({1: 'Trapezoidal', 2: 'Simpson'})
     df['bc_str'] = df['bc'].map({1: 'Dirichlet', 2: 'Neumann'})
+    if 'rad_unif' in df.columns:
+        df['grid_str'] = df['rad_unif'].map({1: 'Uniform', 0: 'Nonuniform'})
     return df
 
 # ---------------------------------------------------------
@@ -215,7 +231,10 @@ def plot_runtime_vs_m(df_nm):
 
 def plot_runtime_conditions_vs_m(df_bc_quad):
     df_plot = _prepare_table2_df(df_bc_quad).copy()
-    df_plot["condition"] = df_plot["quad_str"] + " + " + df_plot["bc_str"]
+    if 'grid_str' in df_plot.columns:
+        df_plot["condition"] = df_plot["grid_str"] + " + " + df_plot["quad_str"] + " + " + df_plot["bc_str"]
+    else:
+        df_plot["condition"] = df_plot["quad_str"] + " + " + df_plot["bc_str"]
 
     fig, axes = plt.subplots(1, 2, figsize=(16, 5), sharey=True)
 

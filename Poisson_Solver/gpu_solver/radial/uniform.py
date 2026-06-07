@@ -29,10 +29,10 @@ def compute_C_D_uniform(
         f_pos = f_fourier_coeff[: N // 2, :]
         f_neg = f_fourier_coeff[N // 2 + 1 :, :]
 
-        f_pos_im1 = f_pos[:, i_prev]
         f_pos_i = f_pos[:, i]
-        f_neg_im1 = f_neg[:, i_prev]
+        f_pos_im1 = f_pos[:, i_prev]
         f_neg_i = f_neg[:, i]
+        f_neg_im1 = f_neg[:, i_prev]
 
         C[:-1, :] = (delta**2 / (4 * k)) * (
             i_prev * ((i_prev / i) ** (-k)) * f_pos_im1 + i * f_pos_i
@@ -47,7 +47,6 @@ def compute_C_D_uniform(
         )
 
         # Vectorized calculation for D[0, :] for n=0 mode.
-        # This handles indices idx = 1..M-2, which corresponds to i=2..M-1.
         idx = cp.arange(1, M - 1)
         term1 = (idx + 1) * cp.log((idx + 1) * delta) * f_max[idx + 1]
         term2 = idx * cp.log(idx * delta) * f_max[idx]
@@ -66,17 +65,17 @@ def compute_C_D_uniform(
         i_m1 = i - 1
         i_m2 = i - 2
 
-        # --- Modes k = -N/2 .. -1 and k = 1 .. N/2 ---
+        # --- Modes k != 0 and n != 0 ---
         if halfN > 0:
             # Negative frequencies (for C)
-            k_vec = cp.arange(0, halfN) - halfN  # k = -N/2, ..., -1
-            k_col = k_vec[:, None] # shape (halfN, 1)
-            f_pos = f_fourier_coeff[0:halfN, :] # f_n for n=0..halfN-1
+            k_vec = cp.arange(0, halfN) - halfN
+            k_col = k_vec[:, None]
+            f_pos = f_fourier_coeff[0:halfN, :]
 
             # Positive frequencies (for D)
-            n_vec = cp.arange(1, halfN + 1) # n = 1, ..., N/2
-            n_col = n_vec[:, None] # shape (halfN, 1)
-            f_neg = f_fourier_coeff[halfN+1 : N+1, :] # f_n for n=halfN+1..N
+            n_vec = cp.arange(1, halfN + 1)
+            n_col = n_vec[:, None]
+            f_neg = f_fourier_coeff[halfN+1 : N+1, :]
 
             # C calculation for i=2..M-1
             term1_C = (i_m2) * ((i_m2 / i) ** (-k_col)) * f_pos[:, i_m2]
@@ -92,9 +91,9 @@ def compute_C_D_uniform(
 
             # Edge cases for index 0 (from original i=2 case)
             C[0:halfN, 0] = (delta**2 / (4 * k_vec)) * f_pos[:, 1]
-            term1_D0 = (M - 1) * (((M - 2) / (M - 1)) ** n_col) * f_neg[:, M - 1]
+            term1_D0 = (M - 1) * (((M - 2) / (M - 1)) ** n_vec) * f_neg[:, M - 1]
             term2_D0 = (M - 2) * f_neg[:, M - 2]
-            D[1:halfN+1, 0] = -(delta**2 / (4 * n_col)) * (term1_D0 + term2_D0)
+            D[1:halfN+1, 0] = -(delta**2 / (4 * n_vec)) * (term1_D0 + term2_D0)
 
         # --- Highest frequency mode k=0 (n=N/2) for C ---
         C[halfN, i_m1] = (delta**2 / 3.0) * (i_m2 * f_max[i_m2] + 4 * i_m1 * f_max[i_m1] + i * f_max[i])
