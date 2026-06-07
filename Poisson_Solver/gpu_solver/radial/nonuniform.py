@@ -9,14 +9,18 @@ def nonuniform_simps_rule(x: cp.ndarray, f: cp.ndarray) -> float:
 
     # Construct the Vandermonde-like matrix A for quadratic interpolation.
     # A is [[x0^2, x0, 1], [x1^2, x1, 1], [x2^2, x2, 1]]
-    A = cp.vstack([x**2, x, cp.ones_like(x, dtype=float)]).T.astype(float)
+    x0, x1, x2 = x[0], x[1], x[2]
+    A = cp.array([
+        [x0**2, x0, 1.0],
+        [x1**2, x1, 1.0],
+        [x2**2, x2, 1.0],
+    ], dtype=float)
 
     # Solve Ac = f for the coefficients [a, b, c] of the quadratic.
     coeff = cp.linalg.solve(A, f)
     a, b, c = coeff.ravel()
 
     # Analytically integrate the quadratic a*r^2 + b*r + c from x[0] to x[2].
-    x0, x1, x2 = x
     result = (
         (a / 3.0) * (x2**3 - x0**3)
         + (b / 2.0) * (x2**2 - x0**2)
