@@ -5,14 +5,12 @@ from .nonuniform import compute_C_D_nonuniform
 
 # CUDA Kernel for Trapezoidal Rule Recurrence
 trapezoidal_kernel_code = r'''
-#include <cupy/complex.cuh>
-
 extern "C" __global__
 void trapezoidal_recurrence(
-    cupy::complex<double>* v_neg,
-    cupy::complex<double>* v_pos,
-    const cupy::complex<double>* C,
-    const cupy::complex<double>* D,
+    double2* v_neg,
+    double2* v_pos,
+    const double2* C,
+    const double2* D,
     const double* r_m,
     int N,
     int M)
@@ -25,18 +23,27 @@ void trapezoidal_recurrence(
     // v_neg recurrence (forward)
     double exp_neg = (double)(n - halfN);
     if (M > 1) {
-        v_neg[n * M + 1] = C[n * (M - 1) + 0];
+        v_neg[n * M + 1].x = C[n * (M - 1) + 0].x;
+        v_neg[n * M + 1].y = C[n * (M - 1) + 0].y;
     }
     for (int i = 2; i < M; ++i) {
         double factor = pow(r_m[i] / r_m[i - 1], exp_neg);
-        v_neg[n * M + i] = factor * v_neg[n * M + (i - 1)] + C[n * (M - 1) + (i - 1)];
+        int current_idx = n * M + i;
+        int prev_idx = n * M + i - 1;
+        int c_idx = n * (M - 1) + (i - 1);
+        v_neg[current_idx].x = factor * v_neg[prev_idx].x + C[c_idx].x;
+        v_neg[current_idx].y = factor * v_neg[prev_idx].y + C[c_idx].y;
     }
 
     // v_pos recurrence (backward)
     double exp_pos = (double)n;
     for (int i = M - 2; i >= 0; --i) {
         double factor = pow(r_m[i] / r_m[i + 1], exp_pos);
-        v_pos[n * M + i] = factor * v_pos[n * M + (i + 1)] + D[n * (M - 1) + i];
+        int current_idx = n * M + i;
+        int next_idx = n * M + i + 1;
+        int d_idx = n * (M - 1) + i;
+        v_pos[current_idx].x = factor * v_pos[next_idx].x + D[d_idx].x;
+        v_pos[current_idx].y = factor * v_pos[next_idx].y + D[d_idx].y;
     }
 }
 '''
@@ -45,14 +52,12 @@ trapezoidal_kernel = cp.RawKernel(trapezoidal_kernel_code, 'trapezoidal_recurren
 
 # CUDA Kernel for Simpson's Rule Recurrence
 simpson_kernel_code = r'''
-#include <cupy/complex.cuh>
-
 extern "C" __global__
 void simpson_recurrence(
-    cupy::complex<double>* v_neg,
-    cupy::complex<double>* v_pos,
-    const cupy::complex<double>* C,
-    const cupy::complex<double>* D,
+    double2* v_neg,
+    double2* v_pos,
+    const double2* C,
+    const double2* D,
     const double* r_m,
     int N,
     int M)
@@ -64,18 +69,32 @@ void simpson_recurrence(
 
     // v_neg recurrence (forward, 2-step)
     double exp_neg = (double)(n - halfN);
-    if (M > 1) { v_neg[n * M + 1] = C[n * (M - 1) + 0]; }
+    if (M > 1) {
+        v_neg[n * M + 1].x = C[n * (M - 1) + 0].x;
+        v_neg[n * M + 1].y = C[n * (M - 1) + 0].y;
+    }
     for (int i = 2; i < M; ++i) {
         double factor = pow(r_m[i] / r_m[i - 2], exp_neg);
-        v_neg[n * M + i] = factor * v_neg[n * M + (i - 2)] + C[n * (M - 1) + (i - 1)];
+        int current_idx = n * M + i;
+        int prev_idx = n * M + i - 2;
+        int c_idx = n * (M - 1) + (i - 1);
+        v_neg[current_idx].x = factor * v_neg[prev_idx].x + C[c_idx].x;
+        v_neg[current_idx].y = factor * v_neg[prev_idx].y + C[c_idx].y;
     }
 
     // v_pos recurrence (backward, 2-step)
     double exp_pos = (double)n;
-    if (M > 1) { v_pos[n * M + (M - 2)] = D[n * (M - 1) + 0]; }
+    if (M > 1) {
+        v_pos[n * M + (M - 2)].x = D[n * (M - 1) + 0].x;
+        v_pos[n * M + (M - 2)].y = D[n * (M - 1) + 0].y;
+    }
     for (int i = M - 3; i >= 0; --i) {
         double factor = pow(r_m[i] / r_m[i + 2], exp_pos);
-        v_pos[n * M + i] = factor * v_pos[n * M + (i + 2)] + D[n * (M - 1) + (i + 1)];
+        int current_idx = n * M + i;
+        int next_idx = n * M + i + 2;
+        int d_idx = n * (M - 1) + (i + 1);
+        v_pos[current_idx].x = factor * v_pos[next_idx].x + D[d_idx].x;
+        v_pos[current_idx].y = factor * v_pos[next_idx].y + D[d_idx].y;
     }
 }
 '''
