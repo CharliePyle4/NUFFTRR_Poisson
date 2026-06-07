@@ -1,10 +1,10 @@
-import numpy as np
+import cupy as cp
 
 from .uniform import compute_C_D_uniform
 from .nonuniform import compute_C_D_nonuniform
 
-def compute_radial_integrals(r_m: np.ndarray,
-                             f_fourier_coeff: np.ndarray,
+def compute_radial_integrals(r_m: cp.ndarray,
+                             f_fourier_coeff: cp.ndarray,
                              quad_rule: int,
                              rad_unif: int):
     """
@@ -12,9 +12,9 @@ def compute_radial_integrals(r_m: np.ndarray,
 
     Parameters
     ----------
-    r_m : ndarray, shape (M,)
+    r_m : cp.ndarray, shape (M,)
         Radial grid.
-    f_fourier_coeff : ndarray, shape (N+1, M)
+    f_fourier_coeff : cp.ndarray, shape (N+1, M)
         Fourier coefficients f_n(r_m).
     quad_rule : int
         Quadrature rule index (passed through to the underlying routines).
@@ -24,7 +24,7 @@ def compute_radial_integrals(r_m: np.ndarray,
 
     Returns
     -------
-    C, D : ndarray
+    C, D : cp.ndarray
         Radial integral arrays used in the v^-, v^+ recurrences.
     """
     if rad_unif == 1:
@@ -36,9 +36,9 @@ def compute_radial_integrals(r_m: np.ndarray,
     return C, D
 
 
-def compute_v_neg_pos(C: np.ndarray,
-                      D: np.ndarray,
-                      r_m: np.ndarray,
+def compute_v_neg_pos(C: cp.ndarray,
+                      D: cp.ndarray,
+                      r_m: cp.ndarray,
                       N: int,
                       M: int,
                       quad_rule: int):
@@ -47,9 +47,9 @@ def compute_v_neg_pos(C: np.ndarray,
 
     Parameters
     ----------
-    C, D : ndarray, shape (N/2+1, M-1) or similar
+    C, D : cp.ndarray, shape (N/2+1, M-1) or similar
         Radial integral arrays (as produced by compute_C_D_*).
-    r_m : ndarray, shape (M,)
+    r_m : cp.ndarray, shape (M,)
         Radial grid.
     N : int
         Number of angular points.
@@ -61,14 +61,14 @@ def compute_v_neg_pos(C: np.ndarray,
 
     Returns
     -------
-    v_neg, v_pos : ndarray, shape (N/2+1, M)
+    v_neg, v_pos : cp.ndarray, shape (N/2+1, M)
     """
     halfN = N // 2
-    modes = np.arange(halfN + 1)        # 0..N/2
+    modes = cp.arange(halfN + 1)        # 0..N/2
     n_mat = modes + 1                   # 1..N/2+1
 
-    v_neg = np.zeros((halfN + 1, M), dtype=complex)
-    v_pos = np.zeros((halfN + 1, M), dtype=complex)
+    v_neg = cp.zeros((halfN + 1, M), dtype=complex)
+    v_pos = cp.zeros((halfN + 1, M), dtype=complex)
 
     if quad_rule == 1:
         # Trapezoidal: 1‑step recurrences
@@ -114,11 +114,11 @@ def compute_v_neg_pos(C: np.ndarray,
     return v_neg, v_pos
 
 
-def combine_v_neg_pos_to_v(v_neg: np.ndarray,
-                           v_pos: np.ndarray,
-                           r_m: np.ndarray,
+def combine_v_neg_pos_to_v(v_neg: cp.ndarray,
+                           v_pos: cp.ndarray,
+                           r_m: cp.ndarray,
                            N: int,
-                           M: int) -> np.ndarray:
+                           M: int) -> cp.ndarray:
     """
     Combine v^- and v^+ into full v with Hermitian symmetry.
 
@@ -126,30 +126,30 @@ def combine_v_neg_pos_to_v(v_neg: np.ndarray,
     ----------
     v_neg, v_pos : ndarray, shape (N/2+1, M)
         Outputs of compute_v_neg_pos.
-    r_m : ndarray, shape (M,)
+    r_m : cp.ndarray, shape (M,)
         Radial grid.
     N, M : int
         Angular and radial counts.
 
     Returns
     -------
-    v : ndarray, shape (N+1, M)
+    v : cp.ndarray, shape (N+1, M)
     """
     halfN = N // 2
-    v = np.zeros((N + 1, M), dtype=complex)
+    v = cp.zeros((N + 1, M), dtype=complex)
 
     # central mode (k = 0)
     v[halfN, 0] = v_neg[halfN, 0] + v_pos[0, 0]
     if M > 1:
-        v[halfN, 1:] = np.log(r_m[1:]) * v_neg[halfN, 1:] + v_pos[0, 1:]
+        v[halfN, 1:] = cp.log(r_m[1:]) * v_neg[halfN, 1:] + v_pos[0, 1:]
 
     # k = 1..N/2-1 blockwise
-    k_idx = np.arange(1, halfN)
+    k_idx = cp.arange(1, halfN)
     pos_idx = k_idx
     mir_idx = N - k_idx
     pos_from = halfN - k_idx
 
-    v[pos_idx, :] = v_neg[pos_idx, :] + np.conj(v_pos[pos_from, :])
-    v[mir_idx, :] = np.conj(v[pos_idx, :])
+    v[pos_idx, :] = v_neg[pos_idx, :] + cp.conj(v_pos[pos_from, :])
+    v[mir_idx, :] = cp.conj(v[pos_idx, :])
 
     return v

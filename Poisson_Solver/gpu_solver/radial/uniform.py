@@ -1,8 +1,8 @@
 
-import numpy as np
+import cupy as cp
 
 def compute_C_D_uniform(
-    r_m: np.ndarray, f_fourier_coeff: np.ndarray, quad_rule: int
+    r_m: cp.ndarray, f_fourier_coeff: cp.ndarray, quad_rule: int
 ):
     """
     Compute C and D on a uniform radial mesh r_m (spacing delta).
@@ -13,17 +13,17 @@ def compute_C_D_uniform(
     M = len(r_m)
     N = f_fourier_coeff.shape[0] - 1
 
-    C = np.zeros((N // 2 + 1, M - 1), dtype=complex)
-    D = np.zeros((N // 2 + 1, M - 1), dtype=complex)
+    C = cp.zeros((N // 2 + 1, M - 1), dtype=complex)
+    D = cp.zeros((N // 2 + 1, M - 1), dtype=complex)
 
     delta = r_m[1] - r_m[0]
 
     if quad_rule == 1:
-        # your existing trapezoidal implementation (unchanged)
-        i = np.arange(1, M)          # 1..M-1
+        # Trapezoidal rule (vectorized)
+        i = cp.arange(1, M)          # 1..M-1
         i_prev = i - 1
 
-        n = np.arange(1, N // 2 + 1)[:, None]
+        n = cp.arange(1, N // 2 + 1)[:, None]
         k = -N / 2 + n - 1
 
         f_pos = f_fourier_coeff[: N // 2, :]
@@ -46,13 +46,15 @@ def compute_C_D_uniform(
             i_prev * f_max[i_prev] + i * f_max[i]
         )
 
-        for idx, ii in enumerate(i):
-            if ii != 1:
-                D[0, idx] = (delta**2 / 2.0) * (
-                    ii * np.log(ii * delta) * f_max[ii]
-                    + (ii - 1) * np.log((ii - 1) * delta) * f_max[ii - 1]
-                )
-        D[0, 0] = (delta**2 / 2.0) * (np.log(delta) * f_max[1])
+        # Vectorized calculation for D[0, :] for n=0 mode.
+        # This handles indices idx = 1..M-2, which corresponds to i=2..M-1.
+        idx = cp.arange(1, M - 1)
+        term1 = (idx + 1) * cp.log((idx + 1) * delta) * f_max[idx + 1]
+        term2 = idx * cp.log(idx * delta) * f_max[idx]
+        D[0, idx] = (delta**2 / 2.0) * (term1 + term2)
+
+        # Handle i=1 case (idx=0) separately.
+        D[0, 0] = (delta**2 / 2.0) * (cp.log(delta) * f_max[1])
 
     elif quad_rule == 2:
         # Simpson variant: 3‑point C_{i-1,i+1}, D_{i-1,i+1}
@@ -100,23 +102,23 @@ def compute_C_D_uniform(
                 # n=0 mode with logs
                 D[0, i - 1] = (delta**2 / 3.0) * (
                     (i - 2)
-                    * np.log((i - 2) * delta)
+                    * cp.log((i - 2) * delta)
                     * f_fourier_coeff[N // 2, i - 2]
                     + 4 * (i - 1)
-                    * np.log((i - 1) * delta)
+                    * cp.log((i - 1) * delta)
                     * f_fourier_coeff[N // 2, i - 1]
-                    + i * np.log(i * delta)
+                    + i * cp.log(i * delta)
                     * f_fourier_coeff[N // 2, i]
                 )
 
         C[N // 2, 0] = (delta**2 / 2.0) * f_fourier_coeff[N // 2, 1]
         D[0, 1] = (delta**2 / 3.0) * (
-            4 * np.log(delta) * f_fourier_coeff[N // 2, 1]
-            + 2 * np.log(2 * delta) * f_fourier_coeff[N // 2, 2]
+            4 * cp.log(delta) * f_fourier_coeff[N // 2, 1]
+            + 2 * cp.log(2 * delta) * f_fourier_coeff[N // 2, 2]
         )
         D[0, 0] = (delta**2 / 2.0) * (
-            (M - 2) * np.log((M - 2) * delta) * f_fourier_coeff[N // 2, M - 2]
-            + (M - 1) * np.log((M - 1) * delta) * f_fourier_coeff[N // 2, M - 1]
+            (M - 2) * cp.log((M - 2) * delta) * f_fourier_coeff[N // 2, M - 2]
+            + (M - 1) * cp.log((M - 1) * delta) * f_fourier_coeff[N // 2, M - 1]
         )
 
     else:

@@ -1,6 +1,6 @@
-import numpy as np
+import cupy as cp
 
-def nonuniform_simps_rule(x: np.ndarray, f: np.ndarray) -> float:
+def nonuniform_simps_rule(x: cp.ndarray, f: cp.ndarray) -> float:
     """
     Approximate the definite integral over [x[0], x[2]] of a function sampled
     at three non-uniformly spaced points (x, f), by fitting a quadratic.
@@ -12,7 +12,7 @@ def nonuniform_simps_rule(x: np.ndarray, f: np.ndarray) -> float:
     x1_2 = x1 * x1
     x2_2 = x2 * x2
 
-    A = np.array(
+    A = cp.array(
         [
             [x0_2, x0, 1.0],
             [x1_2, x1, 1.0],
@@ -21,7 +21,7 @@ def nonuniform_simps_rule(x: np.ndarray, f: np.ndarray) -> float:
         dtype=float,
     )
 
-    coeff = np.linalg.solve(A, f)  # (3,1): a, b, c
+    coeff = cp.linalg.solve(A, f)  # (3,1): a, b, c
 
     a = coeff[0]
     b = coeff[1]
@@ -37,7 +37,7 @@ def nonuniform_simps_rule(x: np.ndarray, f: np.ndarray) -> float:
 
 
 def compute_C_D_nonuniform(
-    r_m: np.ndarray, f_fourier_coeff: np.ndarray, quad_rule: int
+    r_m: cp.ndarray, f_fourier_coeff: cp.ndarray, quad_rule: int
 ):
     """
     Compute C and D on a nonuniform radial mesh r_m.
@@ -45,14 +45,14 @@ def compute_C_D_nonuniform(
     M = len(r_m)
     N = f_fourier_coeff.shape[0] - 1
 
-    C = np.zeros((N // 2 + 1, M - 1), dtype=complex)
-    D = np.zeros((N // 2 + 1, M - 1), dtype=complex)
+    C = cp.zeros((N // 2 + 1, M - 1), dtype=complex)
+    D = cp.zeros((N // 2 + 1, M - 1), dtype=complex)
 
-    delta = np.diff(r_m)  # (M-1,)
+    delta = cp.diff(r_m)  # (M-1,)
 
     if quad_rule == 1:
         # ----- Trapezoidal rule (vectorized) -----
-        n = np.arange(1, N // 2 + 1)[:, None]  # (N//2,1)
+        n = cp.arange(1, N // 2 + 1)[:, None]  # (N//2,1)
         k = -N / 2 + n - 1                     # (N//2,1)
 
         r_i    = r_m[:-1][None, :]    # (1,M-1)
@@ -86,27 +86,27 @@ def compute_C_D_nonuniform(
 
         # n = 0 mode for D: vectorized
         # indices i = 1..M-2 (matching original loop range)
-        idx = np.arange(1, M - 1)
+        idx = cp.arange(1, M - 1)
         r_i_vec   = r_m[idx]
         r_ip1_vec = r_m[idx + 1]
         delta_i   = delta[idx]
 
-        term1 = r_ip1_vec * np.log(r_ip1_vec) * f_max[idx + 1]
-        term2 = r_i_vec   * np.log(r_i_vec)   * f_max[idx]
+        term1 = r_ip1_vec * cp.log(r_ip1_vec) * f_max[idx + 1]
+        term2 = r_i_vec   * cp.log(r_i_vec)   * f_max[idx]
         D[0, idx] = delta_i / 2.0 * (term1 + term2)
 
         # i = 0 case
         D[0, 0] = delta[0] / 2.0 * (
-            r_m[1] * np.log(r_m[1]) * f_max[1]
+            r_m[1] * cp.log(r_m[1]) * f_max[1]
         )
 
     elif quad_rule == 2:
         # ----- Simpson on nonuniform mesh (batched in n per i) -----
-        n_arr = np.arange(1, N // 2 + 1)       # 1..N/2
+        n_arr = cp.arange(1, N // 2 + 1)       # 1..N/2
         k_arr = -N / 2 + n_arr - 1            # k = -N/2 + n - 1
 
-        idx_pos = np.arange(0, N // 2)         # n-1
-        idx_neg = np.arange(N // 2 + 1, N + 1) # n+N//2
+        idx_pos = cp.arange(0, N // 2)         # n-1
+        idx_neg = cp.arange(N // 2 + 1, N + 1) # n+N//2
 
         for i in range(1, M - 1):
             r_im1 = r_m[i - 1]
@@ -116,7 +116,7 @@ def compute_C_D_nonuniform(
             x0, x1, x2 = r_im1, r_i, r_ip1
             x0_2, x1_2, x2_2 = x0 * x0, x1 * x1, x2 * x2
 
-            A = np.array(
+            A = cp.array(
                 [
                     [x0_2, x0, 1.0],
                     [x1_2, x1, 1.0],
@@ -124,7 +124,7 @@ def compute_C_D_nonuniform(
                 ],
                 dtype=float,
             )
-            A_inv = np.linalg.inv(A)
+            A_inv = cp.linalg.inv(A)
 
             f_pos_im1 = f_fourier_coeff[idx_pos, i - 1]
             f_pos_i   = f_fourier_coeff[idx_pos, i]
@@ -137,7 +137,7 @@ def compute_C_D_nonuniform(
             k = k_arr.astype(float)
             n = n_arr.astype(float)
 
-            F_C = np.empty((3, N // 2), dtype=complex)
+            F_C = cp.empty((3, N // 2), dtype=complex)
             F_C[0, :] = (
                 r_im1 / (2.0 * k)
                 * (r_ip1 / r_im1) ** k
@@ -153,7 +153,7 @@ def compute_C_D_nonuniform(
                 * f_pos_ip1
             )
 
-            F_D = np.empty((3, N // 2), dtype=complex)
+            F_D = cp.empty((3, N // 2), dtype=complex)
             F_D[0, :] = (
                 -r_im1 / (2.0 * n)
                 * f_neg_im1
@@ -186,7 +186,7 @@ def compute_C_D_nonuniform(
             D[1:,  i] = int_D
 
             # highest frequency n = N//2 for C
-            f_trip_Cmax = np.array([
+            f_trip_Cmax = cp.array([
                 r_im1 * f_fourier_coeff[N // 2, i - 1],
                 r_i   * f_fourier_coeff[N // 2, i],
                 r_ip1 * f_fourier_coeff[N // 2, i + 1],
@@ -199,10 +199,10 @@ def compute_C_D_nonuniform(
 
             # n = 0 for D (log weights), skip i=1 as in original
             if i != 1:
-                f_trip_D0 = np.array([
-                    r_im1 * np.log(r_im1) * f_fourier_coeff[N // 2, i - 1],
-                    r_i   * np.log(r_i)   * f_fourier_coeff[N // 2, i],
-                    r_ip1 * np.log(r_ip1) * f_fourier_coeff[N // 2, i + 1],
+                f_trip_D0 = cp.array([
+                    r_im1 * cp.log(r_im1) * f_fourier_coeff[N // 2, i - 1],
+                    r_i   * cp.log(r_i)   * f_fourier_coeff[N // 2, i],
+                    r_ip1 * cp.log(r_ip1) * f_fourier_coeff[N // 2, i + 1],
                 ], dtype=complex)
                 coeff_D0 = A_inv @ f_trip_D0.reshape(3, 1)
                 a0, b0, c0 = coeff_D0[0, 0], coeff_D0[1, 0], coeff_D0[2, 0]
@@ -222,16 +222,16 @@ def compute_C_D_nonuniform(
 
         # Endpoint corrections for n=N//2 and n=0 (unchanged)
         C[N // 2, 0] = (r_m[1] ** 2 / 2.0) * f_fourier_coeff[N // 2, 1]
-        r_trip0 = np.array([r_m[0], r_m[1], r_m[2]])
-        f_trip_D0 = np.array([
+        r_trip0 = cp.array([r_m[0], r_m[1], r_m[2]])
+        f_trip_D0 = cp.array([
             0.0,
-            r_m[1] * np.log(r_m[1]) * f_fourier_coeff[N // 2, 1],
-            r_m[2] * np.log(r_m[2]) * f_fourier_coeff[N // 2, 2],
+            r_m[1] * cp.log(r_m[1]) * f_fourier_coeff[N // 2, 1],
+            r_m[2] * cp.log(r_m[2]) * f_fourier_coeff[N // 2, 2],
         ], dtype=complex)
         D[0, 1] = nonuniform_simps_rule(r_trip0, f_trip_D0)
         D[0, 0] = delta[M - 2] / 2.0 * (
-            r_m[M - 2] * np.log(r_m[M - 2]) * f_fourier_coeff[N // 2, M - 2]
-            + r_m[M - 1] * np.log(r_m[M - 1]) * f_fourier_coeff[N // 2, M - 1]
+            r_m[M - 2] * cp.log(r_m[M - 2]) * f_fourier_coeff[N // 2, M - 2]
+            + r_m[M - 1] * cp.log(r_m[M - 1]) * f_fourier_coeff[N // 2, M - 1]
         )
 
     else:
