@@ -117,12 +117,14 @@ def run_comparison_case(N, M, bc_choice=1, quad_rule=1, mute=False):
         runtime_gpu, l2_rel_gpu = np.nan, np.nan
 
     # --- 4. Return results ---
+    runtime_diff = runtime_cpu - runtime_gpu if np.isfinite(runtime_cpu) and np.isfinite(runtime_gpu) else np.nan
     return dict(
         N=N, M=M, bc=bc_choice, quad=quad_rule,
         L2_rel_cpu=l2_rel_cpu, runtime_cpu=runtime_cpu,
         L2_rel_gpu=l2_rel_gpu, runtime_gpu=runtime_gpu,
         accuracy_diff=abs(l2_rel_cpu - l2_rel_gpu) if np.isfinite(l2_rel_cpu) and np.isfinite(l2_rel_gpu) else np.nan,
-        speedup=runtime_cpu / runtime_gpu if runtime_gpu > 0 and np.isfinite(runtime_cpu) else np.nan
+        speedup=runtime_cpu / runtime_gpu if runtime_gpu > 0 and np.isfinite(runtime_cpu) and np.isfinite(runtime_gpu) else np.nan,
+        runtime_diff=runtime_diff
     )
 
 # ---------------------------------------------------------
@@ -153,12 +155,55 @@ def run_comparison_pipeline(N_values, M_values, test_type="VaryingNM", fixed_val
 # ---------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------
-def render_multitable(df, index_col, columns_col, value_cols, titles, float_formats):
-    print(f"\n{'='*80}\n Accuracy and Timings \n{'='*80}")
-    for val, title, fmt in zip(value_cols, titles, float_formats):
-        print(f"\n--- {title} ---")
-        pivot = df.pivot_table(index=index_col, columns=columns_col, values=val)
-        display(HTML(pivot.to_html(header=True, float_format=fmt)))
+def _render_pivot(df, index_col, columns_col, value_cols, title, float_format, col_rename_map=None):
+    """Helper to render a single pivot table, potentially with multiple value columns."""
+    if title:
+        print(f"\n{title}")
+    
+    # Ensure value_cols is a list for consistency
+    if not isinstance(value_cols, list):
+        value_cols = [value_cols]
+
+    pivot = df.pivot_table(index=index_col, columns=columns_col, values=value_cols)
+
+    if len(value_cols) > 1:
+        # For multi-value tables, create a clean side-by-side view.
+        pivot.columns = pivot.columns.swaplevel(0, 1)
+        pivot.sort_index(axis=1, level=0, inplace=True)
+        
+        if col_rename_map:
+            # Create a list of new names for the inner level
+            new_level_values = [col_rename_map.get(col, col) for col in pivot.columns.get_level_values(1)]
+            # Recreate the full MultiIndex with the new names
+            pivot.columns = pd.MultiIndex.from_arrays([pivot.columns.get_level_values(0), new_level_values], names=pivot.columns.names)
+
+    display(HTML(pivot.to_html(header=True, float_format=float_format)))
+
+def render_accuracy_tables(df, index_col, columns_col, title_suffix=""):
+    """Renders the set of accuracy-related comparison tables."""
+    _render_pivot(df, index_col, columns_col, ["L2_rel_cpu", "L2_rel_gpu"], 
+                  f"--- Accuracy (L2 Rel. Error){title_suffix} ---",
+                  lambda x: f"{x:.2e}", 
+                  {'L2_rel_cpu': 'CPU', 'L2_rel_gpu': 'GPU'})
+    
+    _render_pivot(df, index_col, columns_col, "accuracy_diff", 
+                  f"--- Accuracy Difference (Abs){title_suffix} ---",
+                  lambda x: f"{x:.2e}")
+
+def render_performance_tables(df, index_col, columns_col, title_suffix=""):
+    """Renders the set of performance-related comparison tables."""
+    _render_pivot(df, index_col, columns_col, ["runtime_cpu", "runtime_gpu"],
+                  f"--- Runtimes (s){title_suffix} ---",
+                  lambda x: f"{x:.4f}",
+                  {'runtime_cpu': 'CPU', 'runtime_gpu': 'GPU'})
+
+    _render_pivot(df, index_col, columns_col, "runtime_diff",
+                  f"--- Runtime Difference (CPU - GPU, s){title_suffix} ---",
+                  lambda x: f"{x:.4f}")
+
+    _render_pivot(df, index_col, columns_col, "speedup",
+                  f"--- Speedup (CPU / GPU){title_suffix} ---",
+                  lambda x: f"{x:.2f}x")
 
 def _prepare_table2_df(df):
     df = df.copy()
