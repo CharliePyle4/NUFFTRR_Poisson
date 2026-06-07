@@ -229,18 +229,3 @@ def plot_runtime_conditions_vs_m(df_bc_quad):
 
     plt.tight_layout()
     plt.show()
-    df_plot = _prepare_table2_df(df_bc_quad).copy()
-    df_plot["condition"] = df_plot["quad_str"] + " + " + df_plot["bc_str"]
-
-    fig, axes = plt.subplots(1, 2, figsize=(16, 5), sharey=True)
-
-    for condition, subdf in df_plot.groupby("condition"):
-        subdf = subdf.sort_values("M")
-        _safe_plot_series(axes[0], subdf["M"], subdf["runtime_cpu"], label=condition, marker="o")
-        _safe_plot_series(axes[1], subdf["M"], subdf["runtime_gpu"], label=condition, marker="s")
-
-    _style_runtime_axis(axes[0], "CPU Runtime by Condition for Varying M", "M")
-    _style_runtime_axis(axes[1], "GPU Runtime by Condition for Varying M", "M")
-
-    plt.tight_layout()
-    plt.show()

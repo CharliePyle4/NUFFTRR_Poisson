@@ -5,6 +5,8 @@ from .nonuniform import compute_C_D_nonuniform
 
 # CUDA Kernel for Trapezoidal Rule Recurrence
 trapezoidal_kernel_code = r'''
+#include <cupy/complex.cuh>
+
 extern "C" __global__
 void trapezoidal_recurrence(
     cupy::complex<double>* v_neg,
@@ -43,6 +45,8 @@ trapezoidal_kernel = cp.RawKernel(trapezoidal_kernel_code, 'trapezoidal_recurren
 
 # CUDA Kernel for Simpson's Rule Recurrence
 simpson_kernel_code = r'''
+#include <cupy/complex.cuh>
+
 extern "C" __global__
 void simpson_recurrence(
     cupy::complex<double>* v_neg,
