@@ -362,9 +362,7 @@ def make_radial_method(name, label, rad_unif, rad_mapping=None, azu_unif=2):
 RADIAL_METHODS = [
     make_radial_method("uniform",  "Uniform Radial",      rad_unif=1, rad_mapping=None),
     make_radial_method("sqrt",     "Nonuniform (sqrt)",   rad_unif=0, rad_mapping="sqrt"),
-    make_radial_method("cubic",    "Nonuniform (∛)",      rad_unif=0, rad_mapping="cubic_root"),
-    make_radial_method("atan",     "Nonuniform (arctan)", rad_unif=0, rad_mapping="atan"),
-    make_radial_method("squared",  "Nonuniform (r²)",     rad_unif=0, rad_mapping="squared"),
+    make_radial_method("random",  "Nonuniform (rand)",   rad_unif=0, rad_mapping="random")
 ]
 
 
