@@ -19,7 +19,7 @@ from Poisson_Solver.grids import (
     generate_grid_values,
     compute_zero_mode
 )
-from Poisson_Solver.visualization import compute_error_metrics, plot_on_disk_with_error
+from Poisson_Solver.visualization import compute_error_metrics
 from Poisson_Solver.poisson_solver import poisson_solver
 
 
@@ -241,58 +241,71 @@ def render_table2_runtime(df, title_prefix="Table 2"):
 # New Visualization & Plotting Helpers
 # ---------------------------------------------------------
 
-def run_and_plot_case(N, M, method, bc_choice=1, quad_rule=1):
+def run_and_plot_errors_vary_m(N_fixed, M_values, methods, bc_choice=1, quad_rule=1):
     """
-    Runs a single test case and plots the true solution, approximate solution,
-    and the pointwise error.
+    Runs test cases for a fixed N and varying M for different methods,
+    and plots the pointwise error for each in a grid structure.
     """
-    print(f"Running case for N={N}, M={M}, method='{method['name']}', BC={'Dirichlet' if bc_choice==1 else 'Neumann'}")
-
-    # --- Setup grid and problem values (mirrors run_case) ---
-    iRadius = generate_uniform_radial(M, R)
-    iAngle = get_angle_mesh(method, N, M)
-
-    x_coord, y_coord = generate_cartesian_grid_on_disk(iAngle, iRadius)
-    f_values = generate_grid_values(f_rhs, x_coord, y_coord)
-    u_t = generate_grid_values(u_true, x_coord, y_coord)
+    num_methods = len(methods)
+    num_m = len(M_values)
     
-    if bc_choice == 1:
-        g_values = generate_grid_values(g_dirichlet, x_coord[:, M-1], y_coord[:, M-1])
-    else:
-        g_values = generate_grid_values(g_neumann, x_coord[:, M-1], y_coord[:, M-1])
-
-    nudft_flag = method.get("use_nudft", False)
-    solver_azu = method.get("solver_azu_unif", method["azu_unif"])
+    fig, axes = plt.subplots(
+        num_methods, 
+        num_m, 
+        figsize=(5 * num_m, 4.5 * num_methods), 
+        subplot_kw={'projection': '3d'}
+    )
     
-    if bc_choice == 2:
-        u_fourier_0_arr = compute_zero_mode(u_t, iAngle, method["azu_unif"])
-        u_fourier_0 = u_fourier_0_arr[-1]
-    else:
-        u_fourier_0 = np.array([])
+    # Ensure axes is always a 2D array for consistent indexing
+    if num_methods == 1 and num_m == 1:
+        axes = np.array([[axes]])
+    elif num_methods == 1:
+        axes = np.array([axes])
+    elif num_m == 1:
+        axes = axes.reshape(-1, 1)
 
-    # --- Run solver ---
-    t0 = time.perf_counter()
-    try:
-        u_approx = poisson_solver(
-            f_values, g_values, u_fourier_0,
-            N, M, iRadius, iAngle, R,
-            quad_rule=quad_rule, BC_choice=bc_choice,
-            rad_unif=RAD_UNIF,
-            azu_unif=solver_azu,
-            use_nudft_angular=nudft_flag,
-            maxiter_nufft=50, tol_nufft=1e-8
-        )
-        runtime = time.perf_counter() - t0
-        print(f"Solver runtime: {runtime:.4f}s")
+    fig.suptitle(f"Pointwise Error for N={N_fixed} (BC={'Dirichlet' if bc_choice==1 else 'Neumann'}, Quad={'Trap.' if quad_rule==1 else 'Simp.'})", fontsize=16)
 
-        # --- Compute, print, and plot errors ---
-        _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)
-        print(f"L2 Relative Error: {l2_rel:.4e}")
+    for i, method in enumerate(methods):
+        for j, M in enumerate(M_values):
+            ax = axes[i, j]
+            
+            # --- Run solver logic ---
+            iRadius = generate_uniform_radial(M, R)
+            iAngle = get_angle_mesh(method, N_fixed, M)
 
-        plot_on_disk_with_error(x_coord, y_coord, u_approx, u_t)
+            x_coord, y_coord = generate_cartesian_grid_on_disk(iAngle, iRadius)
+            f_values = generate_grid_values(f_rhs, x_coord, y_coord)
+            u_t = generate_grid_values(u_true, x_coord, y_coord)
+            
+            g_func = g_dirichlet if bc_choice == 1 else g_neumann
+            g_values = generate_grid_values(g_func, x_coord[:, -1], y_coord[:, -1])
 
-    except Exception as exc:
-        print(f"  !! ERROR [{method['name']}] N={N} M={M}: {exc}")
+            u_fourier_0 = compute_zero_mode(u_t, iAngle, method["azu_unif"])[-1] if bc_choice == 2 else np.array([])
+
+            try:
+                u_approx = poisson_solver(
+                    f_values, g_values, u_fourier_0, N_fixed, M, iRadius, iAngle, R,
+                    quad_rule=quad_rule, BC_choice=bc_choice, rad_unif=RAD_UNIF, azu_unif=method.get("solver_azu_unif", method["azu_unif"]),
+                    use_nudft_angular=method.get("use_nudft", False)
+                )
+                _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)
+                
+                ptwise_error = np.abs(u_t - u_approx)
+                Xp, Yp = np.vstack([x_coord, x_coord[0, :]]), np.vstack([y_coord, y_coord[0, :]])
+                Ep = np.vstack([ptwise_error, ptwise_error[0, :]])
+
+                ax.plot_surface(Xp, Yp, Ep, cmap="viridis")
+                ax.set_title(f"{method['label']}\nM={M}, L2_rel={l2_rel:.2e}")
+
+            except Exception as exc:
+                print(f"  !! ERROR [{method['name']}] N={N_fixed} M={M}: {exc}")
+                ax.text(0.5, 0.5, 0.5, "ERROR", transform=ax.transAxes, ha='center', va='center')
+                ax.set_title(f"{method['label']}\nM={M}")
+                ax.axis('off')
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
 
 
 def plot_convergence(df, x_axis='N', title=None, log_y=True, log_x=False):

@@ -235,7 +235,7 @@ def _invert_nudft(theta_j, f):
 
     # Use lstsq for numerical stability. rcond acts as a regularizer.
     # It handles both vector and matrix f.
-    return lstsq(A, f, rcond=REG_PARAM)[0]
+    return lstsq(A, f, cond=REG_PARAM)[0]
 
 
 # ---------------------------------------------------------
