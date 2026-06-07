@@ -22,7 +22,6 @@ def poisson_solver(f_values, g_values, u_fourier_0,
     """
 
     if use_gpu:
-        # GPU code not added yet, but we route to it here for the future
         from .gpu_solver.poisson_solver import poisson_solver as backend_solver
     else:
         from .cpu_solver.poisson_solver import poisson_solver as backend_solver

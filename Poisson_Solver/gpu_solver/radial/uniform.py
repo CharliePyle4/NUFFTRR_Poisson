@@ -57,68 +57,62 @@ def compute_C_D_uniform(
         D[0, 0] = (delta**2 / 2.0) * (cp.log(delta) * f_max[1])
 
     elif quad_rule == 2:
-        # Simpson variant: 3‑point C_{i-1,i+1}, D_{i-1,i+1}
-        for i in range(2, M):  # i=2..M-1
-            for n in range(1, N // 2 + 1):
-                k = -N / 2 + n - 1
+        # Simpson variant: 3-point stencil, fully vectorized.
+        halfN = N // 2
+        f_max = f_fourier_coeff[halfN, :]
 
-                C[n - 1, i - 1] = (delta**2 / (6 * k)) * (
-                    (i - 2)
-                    * ((i - 2) / i) ** (-k)
-                    * f_fourier_coeff[n - 1, i - 2]
-                    + 4 * (i - 1)
-                    * ((i - 1) / i) ** (-k)
-                    * f_fourier_coeff[n - 1, i - 1]
-                    + i * f_fourier_coeff[n - 1, i]
-                )
+        # --- Part 1: Main stencil for indices 1 to M-2 (corresponds to original i=2..M-1) ---
+        i = cp.arange(2, M)
+        i_m1 = i - 1
+        i_m2 = i - 2
 
-                D[n, i - 1] = -(delta**2 / (6 * n)) * (
-                    (i - 2) * f_fourier_coeff[n + N // 2, i - 2]
-                    + 4 * (i - 1)
-                    * ((i - 2) / (i - 1)) ** n
-                    * f_fourier_coeff[n + N // 2, i - 1]
-                    + i * ((i - 2) / i) ** n
-                    * f_fourier_coeff[n + N // 2, i]
-                )
+        # Modes n=1..N/2 (k != 0)
+        if halfN > 0:
+            n_vec = cp.arange(1, halfN + 1)[:, None]
+            k_vec = -halfN + n_vec - 1
 
-                if i == 2:
-                    # left endpoint C_{1,2}^n, D_{1,2}^n
-                    C[n - 1, 0] = (delta**2 / (4 * k)) * f_fourier_coeff[n - 1, 1]
-                    D[n, 0] = -(delta**2 / (4 * n)) * (
-                        (M - 1)
-                        * ((M - 2) / (M - 1)) ** n
-                        * f_fourier_coeff[n + N // 2, M - 1]
-                        + (M - 2) * f_fourier_coeff[n + N // 2, M - 2]
-                    )
+            f_pos = f_fourier_coeff[:halfN, :]
+            f_neg = f_fourier_coeff[halfN + 1:, :]
 
-            # highest frequency n=N//2
-            C[N // 2, i - 1] = (delta**2 / 3.0) * (
-                (i - 2) * f_fourier_coeff[N // 2, i - 2]
-                + 4 * (i - 1) * f_fourier_coeff[N // 2, i - 1]
-                + i * f_fourier_coeff[N // 2, i]
+            # C calculation for i=2..M-1
+            term1_C = (i_m2) * ((i_m2 / i) ** (-k_vec)) * f_pos[:, i_m2]
+            term2_C = 4 * (i_m1) * ((i_m1 / i) ** (-k_vec)) * f_pos[:, i_m1]
+            term3_C = i * f_pos[:, i]
+            C[:halfN, i_m1] = (delta**2 / (6 * k_vec)) * (term1_C + term2_C + term3_C)
+
+            # D calculation for i=2..M-1
+            term1_D = (i_m2) * f_neg[:, i_m2]
+            term2_D = 4 * (i_m1) * ((i_m2 / i_m1) ** n_vec) * f_neg[:, i_m1]
+            term3_D = i * ((i_m2 / i) ** n_vec) * f_neg[:, i]
+            D[1:, i_m1] = -(delta**2 / (6 * n_vec)) * (term1_D + term2_D + term3_D)
+
+            # Edge cases for index 0 (from original i=2 case)
+            C[:halfN, 0] = (delta**2 / (4 * k_vec)) * f_pos[:, 1]
+            term1_D0 = (M - 1) * (((M - 2) / (M - 1)) ** n_vec) * f_neg[:, M - 1]
+            term2_D0 = (M - 2) * f_neg[:, M - 2]
+            D[1:, 0] = -(delta**2 / (4 * n_vec)) * (term1_D0 + term2_D0)
+
+        # Highest frequency mode n=N/2
+        C[halfN, i_m1] = (delta**2 / 3.0) * (i_m2 * f_max[i_m2] + 4 * i_m1 * f_max[i_m1] + i * f_max[i])
+        C[halfN, 0] = (delta**2 / 2.0) * f_max[1]
+
+        # Zero mode n=0 for D (with logs)
+        if M > 2:
+            i_log = cp.arange(3, M)
+            term1_D0_log = (i_log - 2) * cp.log(r_m[i_log - 2]) * f_max[i_log - 2]
+            term2_D0_log = 4 * (i_log - 1) * cp.log(r_m[i_log - 1]) * f_max[i_log - 1]
+            term3_D0_log = i_log * cp.log(r_m[i_log]) * f_max[i_log]
+            D[0, i_log - 1] = (delta**2 / 3.0) * (term1_D0_log + term2_D0_log + term3_D0_log)
+
+        # Edge cases for D[0,:]
+        if M > 2:
+            D[0, 1] = (delta**2 / 3.0) * (
+                4 * cp.log(delta) * f_max[1] + 2 * cp.log(2 * delta) * f_max[2]
             )
 
-            if i != 2:
-                # n=0 mode with logs
-                D[0, i - 1] = (delta**2 / 3.0) * (
-                    (i - 2)
-                    * cp.log((i - 2) * delta)
-                    * f_fourier_coeff[N // 2, i - 2]
-                    + 4 * (i - 1)
-                    * cp.log((i - 1) * delta)
-                    * f_fourier_coeff[N // 2, i - 1]
-                    + i * cp.log(i * delta)
-                    * f_fourier_coeff[N // 2, i]
-                )
-
-        C[N // 2, 0] = (delta**2 / 2.0) * f_fourier_coeff[N // 2, 1]
-        D[0, 1] = (delta**2 / 3.0) * (
-            4 * cp.log(delta) * f_fourier_coeff[N // 2, 1]
-            + 2 * cp.log(2 * delta) * f_fourier_coeff[N // 2, 2]
-        )
         D[0, 0] = (delta**2 / 2.0) * (
-            (M - 2) * cp.log((M - 2) * delta) * f_fourier_coeff[N // 2, M - 2]
-            + (M - 1) * cp.log((M - 1) * delta) * f_fourier_coeff[N // 2, M - 1]
+            (M - 2) * cp.log(r_m[M - 2]) * f_max[M - 2]
+            + (M - 1) * cp.log(r_m[M - 1]) * f_max[M - 1]
         )
 
     else:
