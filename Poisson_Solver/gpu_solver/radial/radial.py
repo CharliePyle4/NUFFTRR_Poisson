@@ -3,6 +3,80 @@ import cupy as cp
 from .uniform import compute_C_D_uniform
 from .nonuniform import compute_C_D_nonuniform
 
+# CUDA Kernel for Trapezoidal Rule Recurrence
+trapezoidal_kernel_code = r'''
+extern "C" __global__
+void trapezoidal_recurrence(
+    cupy::complex<double>* v_neg,
+    cupy::complex<double>* v_pos,
+    const cupy::complex<double>* C,
+    const cupy::complex<double>* D,
+    const double* r_m,
+    int N,
+    int M)
+{
+    int n = blockIdx.x * blockDim.x + threadIdx.x;
+    int halfN = N / 2;
+
+    if (n > halfN) return;
+
+    // v_neg recurrence (forward)
+    double exp_neg = (double)(n - halfN);
+    if (M > 1) {
+        v_neg[n * M + 1] = C[n * (M - 1) + 0];
+    }
+    for (int i = 2; i < M; ++i) {
+        double factor = pow(r_m[i] / r_m[i - 1], exp_neg);
+        v_neg[n * M + i] = factor * v_neg[n * M + (i - 1)] + C[n * (M - 1) + (i - 1)];
+    }
+
+    // v_pos recurrence (backward)
+    double exp_pos = (double)n;
+    for (int i = M - 2; i >= 0; --i) {
+        double factor = pow(r_m[i] / r_m[i + 1], exp_pos);
+        v_pos[n * M + i] = factor * v_pos[n * M + (i + 1)] + D[n * (M - 1) + i];
+    }
+}
+'''
+trapezoidal_kernel = cp.RawKernel(trapezoidal_kernel_code, 'trapezoidal_recurrence')
+
+
+# CUDA Kernel for Simpson's Rule Recurrence
+simpson_kernel_code = r'''
+extern "C" __global__
+void simpson_recurrence(
+    cupy::complex<double>* v_neg,
+    cupy::complex<double>* v_pos,
+    const cupy::complex<double>* C,
+    const cupy::complex<double>* D,
+    const double* r_m,
+    int N,
+    int M)
+{
+    int n = blockIdx.x * blockDim.x + threadIdx.x;
+    int halfN = N / 2;
+
+    if (n > halfN) return;
+
+    // v_neg recurrence (forward, 2-step)
+    double exp_neg = (double)(n - halfN);
+    if (M > 1) { v_neg[n * M + 1] = C[n * (M - 1) + 0]; }
+    for (int i = 2; i < M; ++i) {
+        double factor = pow(r_m[i] / r_m[i - 2], exp_neg);
+        v_neg[n * M + i] = factor * v_neg[n * M + (i - 2)] + C[n * (M - 1) + (i - 1)];
+    }
+
+    // v_pos recurrence (backward, 2-step)
+    double exp_pos = (double)n;
+    if (M > 1) { v_pos[n * M + (M - 2)] = D[n * (M - 1) + 0]; }
+    for (int i = M - 3; i >= 0; --i) {
+        double factor = pow(r_m[i] / r_m[i + 2], exp_pos);
+        v_pos[n * M + i] = factor * v_pos[n * M + (i + 2)] + D[n * (M - 1) + (i + 1)];
+    }
+}
+'''
+simpson_kernel = cp.RawKernel(simpson_kernel_code, 'simpson_recurrence')
+
 def compute_radial_integrals(r_m: cp.ndarray,
                              f_fourier_coeff: cp.ndarray,
                              quad_rule: int,
@@ -64,50 +138,26 @@ def compute_v_neg_pos(C: cp.ndarray,
     v_neg, v_pos : cp.ndarray, shape (N/2+1, M)
     """
     halfN = N // 2
-    modes = cp.arange(halfN + 1)        # 0..N/2
-    n_mat = modes + 1                   # 1..N/2+1
+    v_neg = cp.zeros((halfN + 1, M), dtype=cp.complex128)
+    v_pos = cp.zeros((halfN + 1, M), dtype=cp.complex128)
 
-    v_neg = cp.zeros((halfN + 1, M), dtype=complex)
-    v_pos = cp.zeros((halfN + 1, M), dtype=complex)
+    # Kernel launch configuration
+    threads_per_block = 256
+    num_modes = halfN + 1
+    grid_size = (num_modes + threads_per_block - 1) // threads_per_block
 
     if quad_rule == 1:
-        # Trapezoidal: 1‑step recurrences
-        v_neg[:, 1] = C[:, 0]  # r_2
-
-        exp_neg = modes - halfN
-        for i in range(2, M):
-            factor = (r_m[i] / r_m[i - 1]) ** exp_neg
-            v_neg[:, i] = factor * v_neg[:, i - 1] + C[:, i - 1]
-
-        exp_pos = modes
-        for i in range(M - 2, -1, -1):
-            factor = (r_m[i] / r_m[i + 1]) ** exp_pos
-            v_pos[:, i] = factor * v_pos[:, i + 1] + D[:, i]
-
+        # Launch the custom kernel for the trapezoidal rule
+        trapezoidal_kernel(
+            (grid_size,), (threads_per_block,),
+            (v_neg, v_pos, C, D, r_m, N, M)
+        )
     elif quad_rule == 2:
-        # Simpson: 2‑step recurrences
-        exp_neg = n_mat - (halfN + 1)
-
-        for i in range(2, M):
-            ratio = r_m[i] / r_m[i - 2]
-            factor = ratio ** exp_neg
-
-            if i == 2:
-                v_neg[:, 1] = C[:, 0]
-
-            v_neg[:, i] = factor * v_neg[:, i - 2] + C[:, i - 1]
-
-        exp_pos = n_mat - 1
-
-        for i in range(M - 3, -1, -1):
-            ratio = r_m[i] / r_m[i + 2]
-            factor = ratio ** exp_pos
-
-            if i == M - 3:
-                v_pos[:, M - 2] = D[:, 0]
-
-            v_pos[:, i] = factor * v_pos[:, i + 2] + D[:, i + 1]
-
+        # Launch the custom kernel for Simpson's rule
+        simpson_kernel(
+            (grid_size,), (threads_per_block,),
+            (v_neg, v_pos, C, D, r_m, N, M)
+        )
     else:
         raise ValueError('Incorrect quad_rule')
 
