@@ -5,31 +5,21 @@ def nonuniform_simps_rule(x: cp.ndarray, f: cp.ndarray) -> float:
     Approximate the definite integral over [x[0], x[2]] of a function sampled
     at three non-uniformly spaced points (x, f), by fitting a quadratic.
     """
-    f = f.reshape(-1, 1) if f.ndim == 1 else f  # (3,1)
+    f = f.reshape(-1, 1) if f.ndim == 1 else f
 
+    # Construct the Vandermonde-like matrix A for quadratic interpolation.
+    # A is [[x0^2, x0, 1], [x1^2, x1, 1], [x2^2, x2, 1]]
+    A = cp.vstack([x**2, x, cp.ones_like(x, dtype=float)]).T.astype(float)
+
+    # Solve Ac = f for the coefficients [a, b, c] of the quadratic.
+    coeff = cp.linalg.solve(A, f)
+    a, b, c = coeff.ravel()
+
+    # Analytically integrate the quadratic a*r^2 + b*r + c from x[0] to x[2].
     x0, x1, x2 = x
-    x0_2 = x0 * x0
-    x1_2 = x1 * x1
-    x2_2 = x2 * x2
-
-    A = cp.array(
-        [
-            [x0_2, x0, 1.0],
-            [x1_2, x1, 1.0],
-            [x2_2, x2, 1.0],
-        ],
-        dtype=float,
-    )
-
-    coeff = cp.linalg.solve(A, f)  # (3,1): a, b, c
-
-    a = coeff[0]
-    b = coeff[1]
-    c = coeff[2]
-
     result = (
         (a / 3.0) * (x2**3 - x0**3)
-        + (b / 2.0) * (x2_2 - x0_2)
+        + (b / 2.0) * (x2**2 - x0**2)
         + c * (x2 - x0)
     )
 
