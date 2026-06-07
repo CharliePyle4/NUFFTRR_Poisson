@@ -15,7 +15,8 @@ from Poisson_Solver.grids import (
     generate_fixed_nonuniform_azimuthal,
     generate_nonuniform_azimuthal,
     generate_cartesian_grid_on_disk,
-    generate_grid_values
+    generate_grid_values,
+    compute_zero_mode
 )
 from Poisson_Solver.visualization import compute_error_metrics
 from Poisson_Solver.poisson_solver import poisson_solver
@@ -96,7 +97,8 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
     
     # Calculate zero-mode for Neumann uniqueness
     if bc_choice == 2:
-        u_fourier_0 = u_t.mean(axis=0)
+        u_fourier_0_arr = compute_zero_mode(u_t, iAngle, method["azu_unif"])
+        u_fourier_0 = u_fourier_0_arr[-1]  # Pass u_0(R) to fix the constant
     else:
         u_fourier_0 = np.array([])
 

@@ -1,6 +1,7 @@
 import numpy as np
 import finufft
-from scipy.sparse.linalg import LinearOperator
+from scipy.linalg import lstsq
+from scipy.sparse.linalg import LinearOperator, lsqr
 
 
 # ---------------------------------------------------------
@@ -79,45 +80,75 @@ def _make_nufft_plans(x_wrapped, N_modes, K, eps=1e-12):
 
 
 # ---------------------------------------------------------
-# Block CG
+# Block CGLS (Conjugate Gradient for Least Squares)
 # ---------------------------------------------------------
-def _block_cg(A_op, B, tol=1e-8, maxiter=50):
+def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=50, damp=1e-9):
+    """
+    Block Conjugate Gradient for Least Squares (CGLS).
+    Solves min ||AX - B||_F^2 + damp^2 ||X||_F^2 for a block of vectors.
+    A_op: function for matrix-block product A @ X
+    AH_op: function for adjoint matrix-block product A.H @ X
+    B: block of right-hand sides (N, K)
+    """
     N, K = B.shape
-    X = np.zeros_like(B)
+    X = np.zeros_like(B, dtype=np.complex128)
     R = B.copy()
-    P = R.copy()
+    S = AH_op(R)
 
-    def _block_norm2(M):
-        return np.sum(np.abs(M)**2)
+    # Add damping term to the gradient for the regularized problem
+    if damp > 0:
+        S -= damp**2 * X
 
-    R_norm0_sq = _block_norm2(R)
-    if R_norm0_sq == 0.0:
+    P = S.copy()
+    gamma = np.sum(np.abs(S)**2)
+
+    if gamma == 0.0:
         return X
-    R_norm0 = np.sqrt(R_norm0_sq)
+
+    norm_b_sq = np.sum(np.abs(B)**2)
 
     for _ in range(maxiter):
-        AP = A_op(P)
-        R_norm_sq = _block_norm2(R)
-        den = np.vdot(P, AP)
-        alpha = R_norm_sq / den
-        X += alpha * P
-        R_new = R - alpha * AP
-        R_new_norm_sq = _block_norm2(R_new)
-        if np.sqrt(R_new_norm_sq) / R_norm0 < tol:
-            R = R_new
+        Q = A_op(P)
+
+        # Add damping term for regularization
+        if damp > 0:
+            Q += damp * P
+
+        delta = np.sum(np.abs(Q)**2)
+        if delta == 0.0:
+            # This can happen if P is in the null space of the augmented operator
             break
-        beta = R_new_norm_sq / R_norm_sq
-        P = R_new + beta * P
-        R = R_new
+
+        alpha = gamma / delta
+
+        X += alpha * P
+        R -= alpha * Q
+        S_new = AH_op(R)
+
+        if damp > 0:
+            S_new -= damp**2 * X
+
+        gamma_new = np.sum(np.abs(S_new)**2)
+
+        # Convergence check using the norm of the residual of the normal equations
+        if np.sqrt(gamma_new) < tol * np.sqrt(norm_b_sq):
+            break
+
+        beta = gamma_new / gamma
+        P = S_new + beta * P
+        gamma = gamma_new
+
     return X
 
 
 # ---------------------------------------------------------
-# Invert NUFFT via Block CG — shared mesh (azu_unif == 1)
+# Invert NUFFT via Block CGLS — shared mesh (azu_unif == 1)
 # One plan for all M radii simultaneously.
 # ---------------------------------------------------------
+REG_PARAM = 1e-9  # Tikhonov regularization parameter
 
-def _invert_nufft_via_block_cg(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
+
+def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
     theta_j = np.asarray(theta_j, dtype=float)
     x_wrapped = _wrap_angles(theta_j)
     f = np.asarray(f, dtype=np.complex128)
@@ -125,32 +156,35 @@ def _invert_nufft_via_block_cg(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
 
     if f.ndim == 1:
         f = f[:, None]
-    N_pts, K = f.shape
+    N_pts, K = f.shape # N_pts is also N here
 
+    # Create batched plans for all K transforms at once
     plan_fwd, plan_adj = _make_nufft_plans(x_wrapped, N_modes=N, K=K, eps=eps)
 
-    f_KM = np.ascontiguousarray(f.T)
-    B_KN = plan_adj.execute(f_KM)
-    B = np.ascontiguousarray(B_KN.T)
+    # Buffers for contiguous memory access to be used with plan.execute
+    fwd_in_buf = np.empty((K, N), dtype=np.complex128)
+    fwd_out_buf = np.empty((K, N_pts), dtype=np.complex128)
+    adj_in_buf = np.empty((K, N_pts), dtype=np.complex128)
 
-    V_KN_buf  = np.empty((K, N), dtype=np.complex128)
-    AV_KM_buf = np.empty((K, N), dtype=np.complex128)
+    def A_op(C_block): # Applies A to a block of columns
+        fwd_in_buf[...] = C_block.T
+        plan_fwd.execute(fwd_in_buf, out=fwd_out_buf)
+        return fwd_out_buf.T
 
-    def AHA_block(V):
-        V_KN_buf[...] = V.T
-        AV_KM = plan_fwd.execute(V_KN_buf)
-        AV_KM_buf[...] = AV_KM
-        AHA_V_KN = plan_adj.execute(AV_KM_buf)
-        return AHA_V_KN.T
+    def AH_op(D_block): # Applies A.H to a block of columns
+        adj_in_buf[...] = D_block.T
+        return plan_adj.execute(adj_in_buf).T
 
-    X = _block_cg(AHA_block, B, tol=tol, maxiter=maxiter)
+    # Solve min ||AX - F||^2 using block CGLS
+    X = _block_cgls(A_op, AH_op, f, tol=tol, maxiter=maxiter, damp=REG_PARAM)
+
     return X[:, 0] if K == 1 else X
 
 
 # ---------------------------------------------------------
-# Invert NUFFT via CG — per-radius (azu_unif == 0)
+# Invert NUFFT via LSQR — per-radius (azu_unif == 0)
 # ---------------------------------------------------------
-def _invert_nufft_via_cg_perradius(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
+def _invert_nufft_lsqr_perradius(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
     """
     theta_j : (N, M)
     f       : (N, M)
@@ -162,32 +196,30 @@ def _invert_nufft_via_cg_perradius(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
 
     core = np.zeros((N, M), dtype=np.complex128)
     for ell in range(M):
-        x_wrapped = _wrap_angles(theta_j[:, ell]) 
-        f_col     = f[:, ell:ell+1]                     # (N, 1) for block_cg
+        x_wrapped = _wrap_angles(theta_j[:, ell])
+
+        # A new operator must be defined for each radius, as the points change.
         plan_fwd, plan_adj = _make_nufft_plans(x_wrapped, N_modes=N, K=1, eps=eps)
 
-        f_KM = np.ascontiguousarray(f_col.T)            # (1, N)
-        B_KN = plan_adj.execute(f_KM)
-        B    = np.ascontiguousarray(B_KN.T)             # (N, 1)
+        def _matvec(c, _pfwd=plan_fwd):
+            c_buf = np.ascontiguousarray(c[None, :])
+            return _pfwd.execute(c_buf)[0, :]
 
-        V_buf   = np.empty((1, N), dtype=np.complex128)
-        AV_buf  = np.empty((1, N), dtype=np.complex128)
+        def _rmatvec(d, _padj=plan_adj):
+            d_buf = np.ascontiguousarray(d[None, :])
+            return _padj.execute(d_buf)[0, :]
 
-        def AHA_block(V, _pfwd=plan_fwd, _padj=plan_adj):
-            V_buf[...] = V.T
-            AV = _pfwd.execute(V_buf)
-            AV_buf[...] = AV
-            return _padj.execute(AV_buf).T
+        A_op = LinearOperator(shape=(N, N), matvec=_matvec, rmatvec=_rmatvec, dtype=np.complex128)
 
-        X = _block_cg(AHA_block, B, tol=tol, maxiter=maxiter)
-        core[:, ell] = X[:, 0]
+        # lsqr is a fast, compiled routine for solving least-squares problems.
+        core[:, ell] = lsqr(A_op, f[:, ell], damp=REG_PARAM, iter_lim=maxiter, atol=tol, btol=tol)[0]
 
     return core
 
 
 # ---------------------------------------------------------
 # NUDFT inversion — shared mesh (azu_unif == 1)
-# One matrix, M right-hand sides. O(N^3 + MN^2).
+# Solves min ||Ax - f|| directly using scipy.linalg.lstsq for stability.
 # ---------------------------------------------------------
 def _invert_nudft(theta_j, f):
     """
@@ -195,27 +227,20 @@ def _invert_nudft(theta_j, f):
     f       : (N,) or (N, K)
     returns : (N,) or (N, K)
     """
-    theta  = np.asarray(theta_j, float)
-    f      = np.asarray(f, dtype=np.complex128)
-    N      = theta.size
-    k      = np.arange(-N // 2, N // 2, dtype=float)
-    A      = np.exp(1j * np.outer(theta, k))    # (N, N)
-    AH     = A.conj().T
-    Mmat   = AH @ A
+    theta = np.asarray(theta_j, float)
+    f = np.asarray(f, dtype=np.complex128)
+    N = theta.size
+    k = np.arange(-N // 2, N // 2, dtype=float)
+    A = np.exp(1j * np.outer(theta, k))  # (N, N)
 
-    if f.ndim == 1:
-        if f.size != N:
-            raise ValueError("theta_j length must equal length of f")
-        return np.linalg.solve(Mmat, AH @ f)
-    else:
-        if f.shape[0] != N:
-            raise ValueError("theta_j length must equal first dim of f")
-        return np.linalg.solve(Mmat, AH @ f)    # (N, K)
+    # Use lstsq for numerical stability. rcond acts as a regularizer.
+    # It handles both vector and matrix f.
+    return lstsq(A, f, rcond=REG_PARAM)[0]
 
 
 # ---------------------------------------------------------
 # NUDFT inversion — per-radius (azu_unif == 0)
-# M matrices, batched. O(MN^3) but one LAPACK call.
+# M matrices, batched. O(MN^3) using batched least-squares.
 # ---------------------------------------------------------
 def _invert_nudft_perradius(theta_j, f):
     """
@@ -224,21 +249,19 @@ def _invert_nudft_perradius(theta_j, f):
     returns : (N, M)
     """
     theta_j = np.asarray(theta_j, dtype=float)
-    f       = np.asarray(f, dtype=np.complex128)
-    N, M    = theta_j.shape
+    f = np.asarray(f, dtype=np.complex128)
+    N, M = theta_j.shape
 
     if f.shape != (N, M):
         raise ValueError(f"f must have shape ({N}, {M}), got {f.shape}")
 
-    k      = np.arange(-N // 2, N // 2, dtype=float)           # (N,)
-    A_all  = np.exp(1j * theta_j.T[:, :, None] * k[None, None, :])  # (M, N, N)
-    AH_all = A_all.conj().transpose(0, 2, 1)                    # (M, N, N)
-    M_all  = AH_all @ A_all                                     # (M, N, N)
-    b_all  = AH_all @ f.T[:, :, None]                          # (M, N, 1)
-    X_all  = np.linalg.solve(M_all, b_all)                     # (M, N, 1)
-
-    return X_all[:, :, 0].T                                    # (N, M)
-
+    k = np.arange(-N // 2, N // 2, dtype=float)
+    # A_all has shape (M, N, N)
+    A_all = np.exp(1j * theta_j.T[:, :, None] * k[None, None, :])
+    # f.T has shape (M, N). np.linalg.lstsq solves M systems in a batch.
+    X_all = np.linalg.lstsq(A_all, f.T, rcond=REG_PARAM)[0]
+    # Transpose result from (M, N) back to (N, M)
+    return X_all.T
 
 
 # ---------------------------------------------------------
@@ -261,8 +284,8 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
     if use_nudft:
         coeff_core = _invert_nudft(theta_j, f_values)
     else:
-        coeff_core = _invert_nufft_via_block_cg(theta_j, f_values,
-                                                tol=tol, maxiter=maxiter, eps=tol)
+        coeff_core = _invert_nufft_block_cgls_shared(theta_j, f_values,
+                                                     tol=tol, maxiter=maxiter, eps=tol)
 
     return _pad_coeff_to_Np1(coeff_core, N)
 
@@ -289,10 +312,7 @@ def compute_fourier_coeff_nonunif_perradius(f_values: np.ndarray,
     if use_nudft:
         core = _invert_nudft_perradius(theta_j, f_values)      # (N, M)
     else:
-        core = _invert_nufft_via_cg_perradius(theta_j, f_values,
-                                              tol=tol, maxiter=maxiter, eps=tol)
+        core = _invert_nufft_lsqr_perradius(theta_j, f_values,
+                                             tol=tol, maxiter=maxiter, eps=tol)
 
     return _pad_coeff_to_Np1(core, N)                          # (N+1, M)
-
-
-# ----------------
