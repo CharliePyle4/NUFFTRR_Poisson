@@ -13,7 +13,8 @@ from Poisson_Solver.grids import (
     generate_uniform_azimuthal,
     generate_cartesian_grid_on_disk,
     generate_grid_values,
-    compute_zero_mode
+    compute_zero_mode,
+    generate_nonuniform_radial
 )
 from Poisson_Solver.visualization import compute_error_metrics
 from Poisson_Solver.poisson_solver import poisson_solver
@@ -58,7 +59,7 @@ def run_comparison_case(N, M, bc_choice=1, quad_rule=1, rad_unif=1, mute=False):
         iRadius_np = generate_uniform_radial(M, R)
     else:
         # Default nonuniform grid is 'sqrt' mapping
-        iRadius_np = generate_nonuniform_radial(M, R, mapping='sqrt')
+        iRadius_np = generate_nonuniform_radial(M, R, mapping='random')
 
     iAngle_np = generate_uniform_azimuthal(N)
     x_coord_np, y_coord_np = generate_cartesian_grid_on_disk(iAngle_np, iRadius_np)
