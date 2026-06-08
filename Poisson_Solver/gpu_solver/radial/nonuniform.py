@@ -409,9 +409,9 @@ def compute_C_D_nonuniform(
                     + (coeff_edge[1, 0] / 2) * dx2e \
                     + coeff_edge[2, 0] * dx1e
         
-        D[0, 0] = delta[M-1] / 2.0 * (
-            r_m[M-1] * cp.log(r_m[M-1]) * f_fourier_coeff[N // 2, M-1]
-            + r_m[M] * cp.log(r_m[M]) * f_fourier_coeff[N // 2, M]
+        D[0, 0] = delta[M - 2] / 2.0 * (
+            r_m[M - 2] * cp.log(r_m[M - 2]) * f_fourier_coeff[N // 2, M - 2]
+            + r_m[M - 1] * cp.log(r_m[M - 1]) * f_fourier_coeff[N // 2, M - 1]
         )
 
     else:

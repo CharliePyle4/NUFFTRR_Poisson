@@ -1,10 +1,14 @@
 import numpy as np
+import warnings
 
 try:
     from numba import njit, prange
+    print("numba found")
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
+    print("numba not avaliable")
+    warnings.warn("Numba not found. Falling back to slower pure-Python implementation for radial recurrences. For a significant speedup, run 'pip install numba'.")
 
 from .uniform import compute_C_D_uniform
 from .nonuniform import compute_C_D_nonuniform
@@ -212,18 +216,31 @@ def combine_v_neg_pos_to_v(v_neg: np.ndarray,
     halfN = N // 2
     v = np.zeros((N + 1, M), dtype=complex)
 
-    # central mode (k = 0)
+    # Central mode (k = 0, index halfN)
+    # v_0(r) = log(r) * v_0^-(r) + v_0^+(r)
     v[halfN, 0] = v_neg[halfN, 0] + v_pos[0, 0]
     if M > 1:
-        v[halfN, 1:] = np.log(r_m[1:]) * v_neg[halfN, 1:] + v_pos[0, 1:]
+        # Handle r_m[0] = 0 case for log
+        with np.errstate(divide='ignore'):
+            log_r = np.log(r_m[1:])
+        v[halfN, 1:] = log_r * v_neg[halfN, 1:] + v_pos[0, 1:]
 
-    # k = 1..N/2-1 blockwise
-    k_idx = np.arange(1, halfN)
-    pos_idx = k_idx
-    mir_idx = N - k_idx
-    pos_from = halfN - k_idx
+    # The combination formula is v_k = v_k^- + conj(v_{-k}^+)
+    # For k < 0, we compute directly.
+    # For k > 0, we use Hermitian symmetry v_k = conj(v_{-k}).
 
-    v[pos_idx, :] = v_neg[pos_idx, :] + np.conj(v_pos[pos_from, :])
-    v[mir_idx, :] = np.conj(v[pos_idx, :])
+    if halfN > 0:
+        # All negative modes k = -N/2, ..., -1 (indices 0..halfN-1)
+        neg_indices = np.arange(0, halfN)
+        # For k = n-halfN, the dual positive k is -k = halfN-n
+        pos_dual_indices = halfN - neg_indices
+        v[neg_indices, :] = v_neg[neg_indices, :] + np.conj(v_pos[pos_dual_indices, :])
+
+        # All positive modes k = 1, ..., N/2 (indices halfN+1..N)
+        pos_indices = np.arange(halfN + 1, N + 1)
+        # For k = n-halfN, the dual negative k is -k.
+        # The array index for -k is (-k)+halfN = -(n-halfN)+halfN = N-n.
+        neg_dual_indices = N - pos_indices
+        v[pos_indices, :] = np.conj(v[neg_dual_indices, :])
 
     return v
