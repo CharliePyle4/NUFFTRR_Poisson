@@ -116,7 +116,7 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
                 rad_unif=RAD_UNIF,
                 azu_unif=solver_azu,
                 use_nudft_angular=nudft_flag,
-                maxiter_nufft=50, tol_nufft=1e-8
+                maxiter_nufft=200, tol_nufft=1e-10
             )
             runtime = time.perf_counter() - t0
 

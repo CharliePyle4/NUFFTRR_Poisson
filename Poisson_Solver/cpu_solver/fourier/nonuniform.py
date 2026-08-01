@@ -103,7 +103,7 @@ def _make_nufft_plans(x_wrapped, N_modes, K, eps=1e-12):
 # ---------------------------------------------------------
 # Block CGLS (Conjugate Gradient for Least Squares)
 # ---------------------------------------------------------
-def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=50, damp=1e-9):
+def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=200, damp=1e-9):
     """
     Block Conjugate Gradient for Least Squares (CGLS).
     Solves min ||W^{1/2}(AX - B)||_F^2 + damp^2 ||X||_F^2 for a block of vectors.
@@ -139,10 +139,7 @@ def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=50, damp=1e-9):
 
         X += alpha * P
         R -= alpha * Q
-        S_new = AH_op(R)
-
-        if damp > 0:
-            S_new -= damp**2 * X
+        S_new = S - alpha * T_P
 
         gamma_new = np.sum(np.abs(S_new)**2)
 
@@ -160,7 +157,7 @@ def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=50, damp=1e-9):
 # Invert NUFFT via Block CGLS — shared mesh (azu_unif == 1)
 # One plan for all M radii simultaneously with density compensation weighting.
 # ---------------------------------------------------------
-REG_PARAM = 1e-9  # Tikhonov regularization parameter
+REG_PARAM = 1e-12  # Tikhonov regularization parameter / condition threshold
 
 
 def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
@@ -281,7 +278,7 @@ def _invert_nudft_perradius(theta_j, f):
 # ---------------------------------------------------------
 def compute_fourier_coeff_nonunif(f_values: np.ndarray,
                                   theta_j: np.ndarray,
-                                  maxiter: int = 50,
+                                  maxiter: int = 200,
                                   tol: float = 1e-8,
                                   use_nudft: bool = False) -> np.ndarray:
     """
@@ -307,7 +304,7 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
 # ---------------------------------------------------------
 def compute_fourier_coeff_nonunif_perradius(f_values: np.ndarray,
                                             theta_j: np.ndarray,
-                                            maxiter: int = 50,
+                                            maxiter: int = 200,
                                             tol: float = 1e-8,
                                             use_nudft: bool = True) -> np.ndarray:
     """

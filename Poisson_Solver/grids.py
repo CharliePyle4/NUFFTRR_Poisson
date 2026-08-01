@@ -24,7 +24,7 @@ def generate_nonuniform_azimuthal(N, M, kind="rand", **kwargs):
     thetas = np.zeros((N, M), dtype=float)
 
     for ell in range(M):
-        if kind == "rand":
+        if kind in ("rand", "random"):
             thetas[:, ell] = generate_rand_azimuthal(N)
         elif kind == "jittered":
             jf = kwargs.get("jitter_fraction", 0.35)
@@ -44,7 +44,7 @@ def generate_nonuniform_azimuthal(N, M, kind="rand", **kwargs):
         else:
             raise ValueError(
                 f"Unknown nonuniform kind '{kind}'. "
-                "Valid options are {'rand', 'jittered', 'clustered', 'sine'}."
+                "Valid options are {'rand', 'random', 'jittered', 'clustered', 'sine'}."
             )
     return thetas
 
@@ -57,7 +57,7 @@ def generate_fixed_nonuniform_azimuthal(N, kind="rand", **kwargs):
     -------
     theta : ndarray, shape (N,)
     """
-    if kind == "rand":
+    if kind in ("rand", "random"):
         return generate_rand_azimuthal(N)
     elif kind == "jittered":
         jf = kwargs.get("jitter_fraction", 0.35)
@@ -73,7 +73,7 @@ def generate_fixed_nonuniform_azimuthal(N, kind="rand", **kwargs):
     else:
         raise ValueError(
             f"Unknown fixed nonuniform kind '{kind}'. "
-            "Valid options are {'rand', 'jittered', 'clustered', 'sine'}."
+            "Valid options are {'rand', 'random', 'jittered', 'clustered', 'sine'}."
         )
 
 
