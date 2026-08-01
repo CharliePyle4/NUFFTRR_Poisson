@@ -10,14 +10,12 @@ def compute_fourier_coeff_unif(f_values: np.ndarray) -> np.ndarray:
     half = N // 2
 
     if _is_matrix(f_values):
-        f_shift  = np.roll(f_values, 1, axis=0)
-        fft_vals = np.fft.fft(f_shift, axis=0) / N
+        fft_vals = np.fft.fft(f_values, axis=0) / N
         coeff    = np.vstack([fft_vals[half:N, :], fft_vals[0:half + 1, :]])
         coeff[0, :] /= 2.0
         coeff[N, :] /= 2.0
     else:
-        f_shift  = np.roll(f_values, 1)
-        fft_vals = np.fft.fft(f_shift) / N
+        fft_vals = np.fft.fft(f_values) / N
         coeff    = np.hstack([fft_vals[half:N], fft_vals[0:half + 1]])
         coeff[0] /= 2.0
         coeff[N] /= 2.0

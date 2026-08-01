@@ -199,25 +199,26 @@ def generate_grid_values(f, x_coord, y_coord):
 def compute_zero_mode(u_true: np.ndarray, theta_j: np.ndarray, azu_unif: int) -> np.ndarray:
     """
     Computes the 0-th Fourier mode (azimuthal average) of the true solution u_true.
-    Uses the arithmetic mean for uniform meshes and explicit trapezoidal integration
-    for nonuniform meshes to avoid O(1) bias.
+    Uses exact spectral/NUDFT Fourier analysis to avoid O(Δθ^2) quadrature bias on non-uniform grids.
     """
+    from .cpu_solver.fourier.fourier import compute_angular_fourier_coefficients
+
     M = u_true.shape[1]
-    u_fourier_0 = np.zeros(M, dtype=np.complex128)
+    halfN = u_true.shape[0] // 2
     
     if azu_unif == 2:
         # Uniform mesh: arithmetic mean is exact
         u_fourier_0 = u_true.mean(axis=0)
     else:
-        # Nonuniform mesh: must use trapezoidal rule
-        for i in range(M):
-            th = theta_j if azu_unif == 1 else theta_j[:, i]
-            
-            # Append first element to the end for periodic integration
-            th_wrapped = np.append(th, th[0] + 2 * np.pi)
-            u_wrapped = np.append(u_true[:, i], u_true[0, i])
-            
-            u_fourier_0[i] = np.trapz(u_wrapped, th_wrapped) / (2 * np.pi)
+        # Nonuniform mesh: use spectral NUDFT/NUFFT analysis
+        f_fc, _ = compute_angular_fourier_coefficients(
+            f_values=u_true,
+            g_values=u_true[:, -1],
+            theta_j=theta_j,
+            azu_unif=azu_unif,
+            use_nudft_angular=True
+        )
+        u_fourier_0 = f_fc[halfN, :]
             
     return u_fourier_0
 

@@ -137,7 +137,8 @@ def trap_2d_on_disk(f, r_m, theta_j):
     else:
         raise ValueError("theta_j must be 1D or 2D")
 
-    return np.trapz(r_m * ang_int, x=r_m)
+    trap_fn = getattr(np, "trapezoid", getattr(np, "trapz", None))
+    return trap_fn(r_m * ang_int, x=r_m)
 
 def compute_error_metrics(u_approx, u_true, r_m, theta_j):
     ptwise_error = np.abs(u_true - u_approx)

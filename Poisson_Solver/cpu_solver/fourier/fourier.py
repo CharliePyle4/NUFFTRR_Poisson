@@ -141,7 +141,7 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
         coeff    = np.vstack([u_fourier_coeff[halfN:N, :],
                               u_fourier_coeff[0:halfN, :]])
         u_approx = np.fft.ifft(coeff, axis=0) * N
-        return np.vstack([u_approx[1:, :], u_approx[:1, :]])
+        return u_approx
 
     elif azu_unif == 1:
         theta = np.asarray(theta_j, dtype=float)
@@ -149,7 +149,6 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
             raise ValueError("theta_j must be 1D of length N when azu_unif == 1")
         x        = np.ascontiguousarray(_wrap_angles(theta))
         coeff    = u_fourier_coeff[:N, :].copy()
-        coeff[0, :] *= 2.0
         coeff_KN = np.ascontiguousarray(coeff.T, dtype=np.complex128)  # (M, N)
         out_KM   = finufft.nufft1d2(x, coeff_KN, isign=+1, eps=eps)   # (M, N)
         return out_KM.T                                                # (N, M)
@@ -159,7 +158,6 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
         if theta.shape != (N, M):
             raise ValueError("theta_j must have shape (N, M) when azu_unif == 0")
         base_coeff = u_fourier_coeff[:N, :].copy()
-        base_coeff[0, :] *= 2.0
         u_approx = np.zeros((N, M), dtype=np.complex128)
         for ell in range(M):
             x      = np.ascontiguousarray(_wrap_angles(theta[:, ell]))
@@ -170,10 +168,6 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
 
     else:
         raise ValueError('Incorrect index for "azu_unif"')
-
-
-
-
 
 
 def compute_u_fourier_coefficients(v: np.ndarray,
@@ -214,10 +208,15 @@ def compute_u_fourier_coefficients(v: np.ndarray,
     halfN = N // 2
     u_fourier_coeff = np.zeros((N + 1, M), dtype=complex)
 
+    # Un-halve endpoint boundary coefficients so g_full[0] and g_full[N] match full v_n(R)
+    g_full = g_fourier_coeff.copy()
+    g_full[0] *= 2.0
+    g_full[N] *= 2.0
+
     # central bin (k = 0)
     if BC_choice == 1:  # Dirichlet
         u_fourier_coeff[halfN, :] = (
-            v[halfN, :] + (g_fourier_coeff[halfN] - v[halfN, M - 1])
+            v[halfN, :] + (g_full[halfN] - v[halfN, M - 1])
         )
     elif BC_choice == 2:  # Neumann
         # v_0(R) is v[halfN, -1]. u_fourier_0 is the reference value u_0(R).
@@ -237,12 +236,18 @@ def compute_u_fourier_coefficients(v: np.ndarray,
 
     if BC_choice == 1:
         B = ratio ** kabs * (
-            g_fourier_coeff[mask, None] - v[mask, M - 1][:, None]
+            g_full[mask, None] - v[mask, M - 1][:, None]
         )
         u_fourier_coeff[mask, :] = v[mask, :] + B
     elif BC_choice == 2:
-        B = ratio ** kabs * (R / kabs) * g_fourier_coeff[mask, None] \
+        B = ratio ** kabs * (R / kabs) * g_full[mask, None] \
             + ratio ** kabs * v[mask, M - 1][:, None]
         u_fourier_coeff[mask, :] = v[mask, :] + B
 
     return u_fourier_coeff
+
+
+
+
+
+

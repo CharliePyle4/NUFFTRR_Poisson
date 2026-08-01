@@ -12,6 +12,27 @@ def _wrap_angles(theta: np.ndarray) -> np.ndarray:
     return (theta + np.pi) % (2 * np.pi) - np.pi
 
 
+def _get_density_weights(theta: np.ndarray) -> np.ndarray:
+    """
+    Compute normalized trapezoidal weights w_j for non-uniform angles theta in [0, 2π).
+    sum(w_j) = 1.0, so that A^* W_norm A ≈ I.
+    """
+    theta = np.asarray(theta, dtype=float)
+    if theta.ndim == 1:
+        th_ext = np.concatenate(([theta[-1] - 2 * np.pi], theta, [theta[0] + 2 * np.pi]))
+        w = (th_ext[2:] - th_ext[:-2]) / (4.0 * np.pi)
+        return w
+    elif theta.ndim == 2:
+        N, M = theta.shape
+        w = np.zeros((N, M), dtype=float)
+        for ell in range(M):
+            th = theta[:, ell]
+            th_ext = np.concatenate(([th[-1] - 2 * np.pi], th, [th[0] + 2 * np.pi]))
+            w[:, ell] = (th_ext[2:] - th_ext[:-2]) / (4.0 * np.pi)
+        return w
+    return np.ones_like(theta)
+
+
 def _is_matrix(a: np.ndarray) -> bool:
     """Check if array is a matrix (2D with multiple columns)."""
     a = np.asarray(a)
@@ -21,7 +42,7 @@ def _is_matrix(a: np.ndarray) -> bool:
 def _pad_coeff_to_Np1(coeff_core: np.ndarray, N: int) -> np.ndarray:
     """
     Pad NUDFT/NUFFT core output (N,) or (N, K) to (N+1,) or (N+1, K).
-    Duplicates k=-N/2 to k=+N/2 and halves both endpoints.
+    Duplicates k=-N/2 to k=+N/2 and halves both endpoints for symmetry.
     """
     if coeff_core.ndim == 1:
         out = np.zeros(N + 1, dtype=np.complex128)
@@ -85,17 +106,13 @@ def _make_nufft_plans(x_wrapped, N_modes, K, eps=1e-12):
 def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=50, damp=1e-9):
     """
     Block Conjugate Gradient for Least Squares (CGLS).
-    Solves min ||AX - B||_F^2 + damp^2 ||X||_F^2 for a block of vectors.
-    A_op: function for matrix-block product A @ X
-    AH_op: function for adjoint matrix-block product A.H @ X
-    B: block of right-hand sides (N, K)
+    Solves min ||W^{1/2}(AX - B)||_F^2 + damp^2 ||X||_F^2 for a block of vectors.
     """
     N, K = B.shape
     X = np.zeros_like(B, dtype=np.complex128)
     R = B.copy()
     S = AH_op(R)
 
-    # Add damping term to the gradient for the regularized problem
     if damp > 0:
         S -= damp**2 * X
 
@@ -109,14 +126,13 @@ def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=50, damp=1e-9):
 
     for _ in range(maxiter):
         Q = A_op(P)
+        T_P = AH_op(Q)
 
-        # Add damping term for regularization
         if damp > 0:
-            Q += damp * P
+            T_P += damp**2 * P
 
-        delta = np.sum(np.abs(Q)**2)
-        if delta == 0.0:
-            # This can happen if P is in the null space of the augmented operator
+        delta = np.sum(np.real(np.conj(P) * T_P))
+        if delta <= 0:
             break
 
         alpha = gamma / delta
@@ -130,7 +146,6 @@ def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=50, damp=1e-9):
 
         gamma_new = np.sum(np.abs(S_new)**2)
 
-        # Convergence check using the norm of the residual of the normal equations
         if np.sqrt(gamma_new) < tol * np.sqrt(norm_b_sq):
             break
 
@@ -143,7 +158,7 @@ def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=50, damp=1e-9):
 
 # ---------------------------------------------------------
 # Invert NUFFT via Block CGLS — shared mesh (azu_unif == 1)
-# One plan for all M radii simultaneously.
+# One plan for all M radii simultaneously with density compensation weighting.
 # ---------------------------------------------------------
 REG_PARAM = 1e-9  # Tikhonov regularization parameter
 
@@ -156,26 +171,26 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
 
     if f.ndim == 1:
         f = f[:, None]
-    N_pts, K = f.shape # N_pts is also N here
+    N_pts, K = f.shape
 
-    # Create batched plans for all K transforms at once
+    w = _get_density_weights(theta_j)[:, None]  # (N, 1)
+
     plan_fwd, plan_adj = _make_nufft_plans(x_wrapped, N_modes=N, K=K, eps=eps)
 
-    # Buffers for contiguous memory access to be used with plan.execute
     fwd_in_buf = np.empty((K, N), dtype=np.complex128)
     fwd_out_buf = np.empty((K, N_pts), dtype=np.complex128)
     adj_in_buf = np.empty((K, N_pts), dtype=np.complex128)
 
-    def A_op(C_block): # Applies A to a block of columns
+    def A_op(C_block):
         fwd_in_buf[...] = C_block.T
         plan_fwd.execute(fwd_in_buf, out=fwd_out_buf)
         return fwd_out_buf.T
 
-    def AH_op(D_block): # Applies A.H to a block of columns
-        adj_in_buf[...] = D_block.T
+    def AH_op(D_block):
+        adj_in_buf[...] = (D_block * w).T
         return plan_adj.execute(adj_in_buf).T
 
-    # Solve min ||AX - F||^2 using block CGLS
+    # Solve min ||W^{1/2} (AX - F)||^2 using preconditioned block CGLS
     X = _block_cgls(A_op, AH_op, f, tol=tol, maxiter=maxiter, damp=REG_PARAM)
 
     return X[:, 0] if K == 1 else X
@@ -185,11 +200,6 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
 # Invert NUFFT via LSQR — per-radius (azu_unif == 0)
 # ---------------------------------------------------------
 def _invert_nufft_lsqr_perradius(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
-    """
-    theta_j : (N, M)
-    f       : (N, M)
-    returns : (N, M)
-    """
     theta_j = np.asarray(theta_j, dtype=float)
     f       = np.asarray(f, dtype=np.complex128)
     N, M    = theta_j.shape
@@ -197,57 +207,53 @@ def _invert_nufft_lsqr_perradius(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
     core = np.zeros((N, M), dtype=np.complex128)
     for ell in range(M):
         x_wrapped = _wrap_angles(theta_j[:, ell])
+        w = _get_density_weights(theta_j[:, ell])
+        w_sqrt = np.sqrt(w)
 
-        # A new operator must be defined for each radius, as the points change.
         plan_fwd, plan_adj = _make_nufft_plans(x_wrapped, N_modes=N, K=1, eps=eps)
 
-        def _matvec(c, _pfwd=plan_fwd):
+        def _matvec(c, _pfwd=plan_fwd, _wsqrt=w_sqrt):
             c_buf = np.ascontiguousarray(c[None, :])
-            return _pfwd.execute(c_buf)[0, :]
+            return _pfwd.execute(c_buf)[0, :] * _wsqrt
 
-        def _rmatvec(d, _padj=plan_adj):
-            d_buf = np.ascontiguousarray(d[None, :])
+        def _rmatvec(d, _padj=plan_adj, _wsqrt=w_sqrt):
+            d_buf = np.ascontiguousarray((d * _wsqrt)[None, :])
             return _padj.execute(d_buf)[0, :]
 
         A_op = LinearOperator(shape=(N, N), matvec=_matvec, rmatvec=_rmatvec, dtype=np.complex128)
+        f_w = f[:, ell] * w_sqrt
 
-        # lsqr is a fast, compiled routine for solving least-squares problems.
-        core[:, ell] = lsqr(A_op, f[:, ell], damp=REG_PARAM, iter_lim=maxiter, atol=tol, btol=tol)[0]
+        core[:, ell] = lsqr(A_op, f_w, damp=REG_PARAM, iter_lim=maxiter, atol=tol, btol=tol)[0]
 
     return core
 
 
 # ---------------------------------------------------------
 # NUDFT inversion — shared mesh (azu_unif == 1)
-# Solves min ||Ax - f|| directly using scipy.linalg.lstsq for stability.
 # ---------------------------------------------------------
 def _invert_nudft(theta_j, f):
-    """
-    theta_j : (N,)
-    f       : (N,) or (N, K)
-    returns : (N,) or (N, K)
-    """
     theta = np.asarray(theta_j, float)
     f = np.asarray(f, dtype=np.complex128)
     N = theta.size
     k = np.arange(-N // 2, N // 2, dtype=float)
-    A = np.exp(1j * np.outer(theta, k))  # (N, N)
+    A = np.exp(1j * np.outer(theta, k))
 
-    # Use lstsq for numerical stability. rcond acts as a regularizer.
-    # It handles both vector and matrix f.
-    return lstsq(A, f, cond=REG_PARAM)[0]
+    w = _get_density_weights(theta)
+    w_sqrt = np.sqrt(w)
+    A_w = A * w_sqrt[:, None]
+
+    if f.ndim == 1:
+        f_w = f * w_sqrt
+    else:
+        f_w = f * w_sqrt[:, None]
+
+    return lstsq(A_w, f_w, cond=REG_PARAM)[0]
 
 
 # ---------------------------------------------------------
 # NUDFT inversion — per-radius (azu_unif == 0)
-# M matrices, batched. O(MN^3) using batched least-squares.
 # ---------------------------------------------------------
 def _invert_nudft_perradius(theta_j, f):
-    """
-    theta_j : (N, M)
-    f       : (N, M)
-    returns : (N, M)
-    """
     theta_j = np.asarray(theta_j, dtype=float)
     f = np.asarray(f, dtype=np.complex128)
     N, M = theta_j.shape
@@ -256,12 +262,18 @@ def _invert_nudft_perradius(theta_j, f):
         raise ValueError(f"f must have shape ({N}, {M}), got {f.shape}")
 
     k = np.arange(-N // 2, N // 2, dtype=float)
-    # A_all has shape (M, N, N)
-    A_all = np.exp(1j * theta_j.T[:, :, None] * k[None, None, :])
-    # f.T has shape (M, N). np.linalg.lstsq solves M systems in a batch.
-    X_all = np.linalg.lstsq(A_all, f.T, rcond=REG_PARAM)[0]
-    # Transpose result from (M, N) back to (N, M)
-    return X_all.T
+    X_all = np.zeros((N, M), dtype=np.complex128)
+
+    for ell in range(M):
+        th = theta_j[:, ell]
+        A = np.exp(1j * np.outer(th, k))
+        w = _get_density_weights(th)
+        w_sqrt = np.sqrt(w)
+        A_w = A * w_sqrt[:, None]
+        f_w = f[:, ell] * w_sqrt
+        X_all[:, ell] = lstsq(A_w, f_w, cond=REG_PARAM)[0]
+
+    return X_all
 
 
 # ---------------------------------------------------------
