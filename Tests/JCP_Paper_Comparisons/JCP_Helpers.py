@@ -11,7 +11,8 @@ from Poisson_Solver.grids import (
     generate_fixed_nonuniform_azimuthal,
     generate_nonuniform_azimuthal,
     generate_cartesian_grid_on_disk,
-    generate_grid_values
+    generate_grid_values,
+    compute_zero_mode
 )
 from Poisson_Solver.visualization import compute_error_metrics
 from Poisson_Solver.poisson_solver import poisson_solver
@@ -114,7 +115,8 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
 
     # n = 0 mode for Neumann (phi_0), empty for Dirichlet
     if bc_choice == 2:
-        u_fourier_0 = u_true.mean(axis=0)
+        u_fourier_0_arr = compute_zero_mode(u_true, iAngle, method_cfg["azu_unif"])
+        u_fourier_0 = u_fourier_0_arr[-1]
     else:
         u_fourier_0 = np.array([])
 
@@ -172,7 +174,11 @@ def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
     elif bc_choice == 2:
         g_values = generate_grid_values(lambda x_val, y_val: g_neumann(x_val, y_val, R), x_coord[:, M - 1], y_coord[:, M - 1])
 
-    u_fourier_0 = u_true.mean(axis=0) if bc_choice == 2 else np.array([])
+    if bc_choice == 2:
+        u_fourier_0_arr = compute_zero_mode(u_true, iAngle, method_cfg["azu_unif"])
+        u_fourier_0 = u_fourier_0_arr[-1]
+    else:
+        u_fourier_0 = np.array([])
 
     u_approx = poisson_solver(
         f_values, g_values, u_fourier_0,
@@ -210,7 +216,7 @@ def run_table_2(methods, N_fixed, M_values, u, f, g_dirichlet, g_neumann, BC_MAP
                     table2_results.append(res)
     return pd.DataFrame(table2_results)
 
-def display_results(df_table1, df_table2, methods, N_values, M_values):
+def display_table_1(df_table1, methods, N_values, M_values):
     def dash_if_nan(x):
         return "—" if pd.isna(x) else f"{x:.1e}"
 
@@ -218,12 +224,26 @@ def display_results(df_table1, df_table2, methods, N_values, M_values):
         name = method["name"]
         print(f"\n{'='*80}\n{method['label']} : TABLE 1\n{'='*80}")
         display(df_table1[df_table1["method"] == name].pivot(index="N", columns="M", values="L_inf_rel").reindex(index=N_values, columns=M_values).map(dash_if_nan))
+
+def display_timing(df_table1, methods, N_values, M_values):
+    def dash_if_nan(x):
+        return "—" if pd.isna(x) else f"{x:.1e}"
+
+    for method in methods:
+        name = method["name"]
         print(f"\n{'='*80}\n{method['label']} : TABLE 1 (Timing)\n{'='*80}")
         display(df_table1[df_table1["method"] == name].pivot(index="N", columns="M", values="time").reindex(index=N_values, columns=M_values).map(dash_if_nan))
+
+def display_table_2(df_table2, methods, N_values, M_values):
+    def dash_if_nan(x):
+        return "—" if pd.isna(x) else f"{x:.1e}"
+
+    for method in methods:
+        name = method["name"]
         print(f"\n{'='*80}\n{method['label']} : TABLE 2\n{'='*80}")
         df2 = df_table2[df_table2["method"] == name]
         display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")[m] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel"]}, axis=1).reindex(M_values).map(dash_if_nan))
-        display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")[m] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel", "time"]}, axis=1).reindex(M_values).map(dash_if_nan))
+
 
 def display_table_varying_M(df_table, methods, M_values, title="TABLE"):
     def dash_if_nan(x):

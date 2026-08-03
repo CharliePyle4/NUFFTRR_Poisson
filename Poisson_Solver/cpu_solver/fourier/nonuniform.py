@@ -134,10 +134,12 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
 
     for _ in range(maxiter):
         Q = A_op(P)
-        T_P = AH_op(Q)
+        AHQ = AH_op(Q)  # A^H * A * P (undamped)
 
         if damp > 0:
-            T_P += damp**2 * P
+            T_P = AHQ + damp**2 * P
+        else:
+            T_P = AHQ
 
         delta = np.sum(np.real(np.conj(P) * T_P))
         if delta <= 0 or np.isnan(delta):
@@ -147,7 +149,7 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
 
         X += alpha * P
         R -= alpha * Q
-        S -= alpha * T_P
+        S -= alpha * AHQ  # S tracks A^H R — only use undamped AHQ
 
         col_residuals = np.sqrt(np.sum(np.abs(R)**2, axis=0)) / (norm_b_cols + 1e-14)
         if np.max(col_residuals) < tol:
@@ -181,7 +183,7 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
 REG_PARAM = 1e-12  # Tikhonov regularization parameter / condition threshold
 
 
-def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-7):
+def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12):
     theta_j = np.asarray(theta_j, dtype=float)
     f_orig = np.asarray(f, dtype=np.complex128)
     N = theta_j.size
@@ -205,12 +207,12 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-7):
     def A_op(C_block):
         fwd_in_buf[...] = C_block.T
         plan_fwd.execute(fwd_in_buf, out=fwd_out_buf)
-        return fwd_out_buf.T
+        return fwd_out_buf.T.copy()
 
     def AH_op(D_block):
         adj_in_buf[...] = (D_block * w).T
         plan_adj.execute(adj_in_buf, out=adj_out_buf)
-        return adj_out_buf.T
+        return adj_out_buf.T.copy()
 
     # 1. Circulant Preconditioner via Point Spread Function (PSF)
     ones_vec = np.ones((N_pts, 1), dtype=np.complex128)
@@ -224,18 +226,15 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-7):
         V_prec_hat = V_hat / eig_c[:, None]
         return np.fft.fftshift(np.fft.ifft(V_prec_hat, axis=0), axes=0)
 
-    # 2. Density-compensated initial guess (Warm-Start)
-    X0 = AH_op(f_arr)
-
-    # Block PCGLS with FINUFFT operators
-    X = _block_cgls(A_op, AH_op, f_arr, M_inv=M_inv, X_init=X0, tol=tol, maxiter=maxiter, damp=REG_PARAM)
+    # Block PCGLS with FINUFFT operators (no warm-start: zero init avoids overflow from misscaled X0)
+    X = _block_cgls(A_op, AH_op, f_arr, M_inv=M_inv, X_init=None, tol=tol, maxiter=maxiter, damp=REG_PARAM)
     return X[:, 0] if f_orig.ndim == 1 else X
 
 
 # ---------------------------------------------------------
 # Invert NUFFT via LSQR — per-radius (azu_unif == 0)
 # ---------------------------------------------------------
-def _invert_nufft_lsqr_perradius(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
+def _invert_nufft_lsqr_perradius(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12):
     theta_j = np.asarray(theta_j, dtype=float)
     f       = np.asarray(f, dtype=np.complex128)
     N, M    = theta_j.shape
@@ -333,7 +332,7 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
         coeff_core = _invert_nudft(theta_j, f_values)
     else:
         coeff_core = _invert_nufft_block_cgls_shared(theta_j, f_values,
-                                                     tol=tol, maxiter=maxiter, eps=1e-7)
+                                                     tol=tol, maxiter=maxiter, eps=1e-12)
 
     return _pad_coeff_to_Np1(coeff_core, N)
 
@@ -361,6 +360,6 @@ def compute_fourier_coeff_nonunif_perradius(f_values: np.ndarray,
         core = _invert_nudft_perradius(theta_j, f_values)      # (N, M)
     else:
         core = _invert_nufft_lsqr_perradius(theta_j, f_values,
-                                             tol=tol, maxiter=maxiter, eps=tol)
+                                             tol=tol, maxiter=maxiter, eps=1e-12)
 
     return _pad_coeff_to_Np1(core, N)                          # (N+1, M)

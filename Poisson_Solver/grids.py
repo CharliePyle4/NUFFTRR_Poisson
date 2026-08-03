@@ -105,7 +105,7 @@ def generate_stratified_rand_azimuthal(N):
     j = np.arange(N, dtype=float)
     sector_starts = 2.0 * np.pi * j / N
     sector_widths = 2.0 * np.pi / N
-    offsets = np.random.uniform(0.0, sector_widths)
+    offsets = np.random.uniform(0.0, sector_widths, size=N)
     theta = sector_starts + offsets
     return np.sort(theta)
 
