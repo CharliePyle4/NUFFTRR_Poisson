@@ -94,16 +94,16 @@ def compute_C_D_uniform(
                 i_c_out = i_c - 1
                 i_c_b = i_c[None, :]
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    term1_C = (i_c_b - 2) * f_pos[:, i_c - 2]
-                    term2_C = 4 * (i_c_b - 1) * ((i_c_b - 1) / (i_c_b - 2)) ** (-k) * f_pos[:, i_c - 1]
-                    term3_C = i_c_b * (i_c_b / (i_c_b - 2)) ** (-k) * f_pos[:, i_c]
+                    term1_C = (i_c_b - 2) * ((i_c_b - 2) / i_c_b) ** (-k) * f_pos[:, i_c - 2]
+                    term2_C = 4 * (i_c_b - 1) * ((i_c_b - 1) / i_c_b) ** (-k) * f_pos[:, i_c - 1]
+                    term3_C = i_c_b * f_pos[:, i_c]
                     C[:halfN, i_c_out] = (delta**2 / (6 * k)) * (term1_C + term2_C + term3_C)
 
             # D matrix (main part)
             with np.errstate(divide='ignore', invalid='ignore'):
-                term1_D = (i_b - 2) * ((i_b - 2) / i_b) ** n * f_neg[:, i - 2]
-                term2_D = 4 * (i_b - 1) * ((i_b - 1) / i_b) ** n * f_neg[:, i - 1]
-                term3_D = i_b * f_neg[:, i]
+                term1_D = (i_b - 2) * f_neg[:, i - 2]
+                term2_D = 4 * (i_b - 1) * ((i_b - 2) / (i_b - 1)) ** n * f_neg[:, i - 1]
+                term3_D = i_b * ((i_b - 2) / i_b) ** n * f_neg[:, i]
                 D[1:, i_out] = -(delta**2 / (6 * n)) * (term1_D + term2_D + term3_D)
 
             # Endpoints (Trapezoidal)
@@ -111,7 +111,10 @@ def compute_C_D_uniform(
             k_ep = -halfN + n_ep - 1
             with np.errstate(divide='ignore', invalid='ignore'):
                 C[:halfN, 0] = (delta**2 / (4 * k_ep)) * f_fourier_coeff[:halfN, 1]
-                D[1:, 0] = -(delta**2 / (4 * n_ep)) * f_fourier_coeff[halfN + 1:, 1]
+                D[1:, 0] = -(delta**2 / (4 * n_ep)) * (
+                    (M - 1) * ((M - 2) / (M - 1)) ** n_ep * f_fourier_coeff[halfN + 1:, M - 1] + 
+                    (M - 2) * f_fourier_coeff[halfN + 1:, M - 2]
+                )
 
         # --- Highest frequency mode n=N/2 for C ---
         C[halfN, i_out] = (delta**2 / 3.0) * (
@@ -134,8 +137,11 @@ def compute_C_D_uniform(
             D[0, 1] = (delta**2 / 3.0) * (
                 4 * np.log(delta) * f_max[1] + 2 * np.log(2 * delta) * f_max[2]
             )
-            # Special case for D[0, 0] (Trapezoidal on first interval [0, delta])
-            D[0, 0] = (delta**2 / 2.0) * (np.log(delta) * f_max[1])
+            # Special case for D[0, 0] (Trapezoidal on last interval)
+            D[0, 0] = (delta**2 / 2.0) * (
+                (M - 1) * np.log((M - 1) * delta) * f_max[M - 1] +
+                (M - 2) * np.log((M - 2) * delta) * f_max[M - 2]
+            )
 
     else:
         raise ValueError("Unknown quad_rule; must be 1 (trapezoidal) or 2 (Simpson).")
