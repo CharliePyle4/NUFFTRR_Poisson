@@ -169,10 +169,7 @@ def compute_C_D_nonuniform(
         if halfN > 0:
             with np.errstate(divide='ignore', invalid='ignore'):
                 C[:halfN, 0] = (delta[0]**2 / (4.0 * k_arr)) * f_fourier_coeff[:halfN, 1]
-                D[1:, 0] = -(delta[M - 2] / (4.0 * n_arr)) * (
-                    r_m[M - 2] * f_fourier_coeff[halfN + 1:, M - 2] +
-                    r_m[M - 1] * (r_m[M - 2] / r_m[M - 1])**n_arr * f_fourier_coeff[halfN + 1:, M - 1]
-                )
+                D[1:, 0] = -(delta[0]**2 / (4.0 * n_arr)) * f_fourier_coeff[halfN + 1:, 1]
 
         # --- Highest frequency mode n=N/2 for C ---
         f_max = f_fourier_coeff[halfN, :]
@@ -220,12 +217,9 @@ def compute_C_D_nonuniform(
                 ], dtype=complex)
                 D[0, 1] = nonuniform_simps_rule(r_trip0, f_trip_D0)
 
-            # D^(M-1,M) for n=0 mode (trapezoidal rule on last interval)
+            # D^(1,2) for n=0 mode (trapezoidal rule on first interval [0, r1])
             if M > 1:
-                D[0, 0] = delta[M - 2] / 2.0 * (
-                    r_m[M - 2] * np.log(r_m[M - 2]) * f_fourier_coeff[halfN, M - 2]
-                    + r_m[M - 1] * np.log(r_m[M - 1]) * f_fourier_coeff[halfN, M - 1]
-                )
+                D[0, 0] = (r_m[1]**2 / 2.0) * (np.log(r_m[1]) * f_fourier_coeff[halfN, 1])
 
     else:
         raise ValueError("quad_rule must be 1 (trapezoidal) or 2 (Simpson).")

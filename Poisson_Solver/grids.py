@@ -26,6 +26,8 @@ def generate_nonuniform_azimuthal(N, M, kind="rand", **kwargs):
     for ell in range(M):
         if kind in ("rand", "random"):
             thetas[:, ell] = generate_rand_azimuthal(N)
+        elif kind in ("stratified_rand", "stratified_random", "stratified"):
+            thetas[:, ell] = generate_stratified_rand_azimuthal(N)
         elif kind == "jittered":
             jf = kwargs.get("jitter_fraction", 0.35)
             thetas[:, ell] = generate_jittered_azimuthal(N, jitter_fraction=jf)
@@ -44,7 +46,7 @@ def generate_nonuniform_azimuthal(N, M, kind="rand", **kwargs):
         else:
             raise ValueError(
                 f"Unknown nonuniform kind '{kind}'. "
-                "Valid options are {'rand', 'random', 'jittered', 'clustered', 'sine'}."
+                "Valid options are {'rand', 'random', 'stratified_rand', 'jittered', 'clustered', 'sine'}."
             )
     return thetas
 
@@ -59,6 +61,8 @@ def generate_fixed_nonuniform_azimuthal(N, kind="rand", **kwargs):
     """
     if kind in ("rand", "random"):
         return generate_rand_azimuthal(N)
+    elif kind in ("stratified_rand", "stratified_random", "stratified"):
+        return generate_stratified_rand_azimuthal(N)
     elif kind == "jittered":
         jf = kwargs.get("jitter_fraction", 0.35)
         return generate_jittered_azimuthal(N, jitter_fraction=jf)
@@ -73,7 +77,7 @@ def generate_fixed_nonuniform_azimuthal(N, kind="rand", **kwargs):
     else:
         raise ValueError(
             f"Unknown fixed nonuniform kind '{kind}'. "
-            "Valid options are {'rand', 'random', 'jittered', 'clustered', 'sine'}."
+            "Valid options are {'rand', 'random', 'stratified_rand', 'jittered', 'clustered', 'sine'}."
         )
 
 
@@ -87,6 +91,23 @@ def generate_rand_azimuthal(N):
     theta = np.random.uniform(0.0, 2 * np.pi, N)
     theta = np.sort(theta)
     return theta
+
+
+def generate_stratified_rand_azimuthal(N):
+    """
+    Generate a stratified random azimuthal mesh.
+
+    Places exactly one independent random angle within each of the N uniform
+    sectors [2π j / N, 2π (j+1) / N). This guarantees non-uniform random node
+    placements while preventing unsampled spatial gaps, ensuring the Fourier
+    matrix remains well-conditioned (κ ~ 1.5) for all N.
+    """
+    j = np.arange(N, dtype=float)
+    sector_starts = 2.0 * np.pi * j / N
+    sector_widths = 2.0 * np.pi / N
+    offsets = np.random.uniform(0.0, sector_widths)
+    theta = sector_starts + offsets
+    return np.sort(theta)
 
 
 def generate_jittered_azimuthal(N, jitter_fraction=0.35):

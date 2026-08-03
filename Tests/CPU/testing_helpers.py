@@ -8,6 +8,7 @@ from IPython.display import display
 import matplotlib.pyplot as plt
 import time
 import warnings
+from tqdm.auto import tqdm
 
 from Poisson_Solver.grids import (
     generate_uniform_radial,
@@ -61,21 +62,25 @@ ANGLE_CACHE = {}
 def get_angle_mesh(method, N, M):
     azu_unif = method["azu_unif"]
     kind = method.get("mesh_kind", "uniform")
-    name = method["name"]
 
     if kind == "uniform":
         return generate_uniform_azimuthal(N)
 
     if azu_unif == 1:
-        key = (name, N)
+        key = (kind, N)
         if key not in ANGLE_CACHE:
+            if kind in ("rand", "random", "stratified_rand", "stratified_random", "stratified"):
+                np.random.seed(42)  # Seed random grid generation for exact reproducibility across solvers
             ANGLE_CACHE[key] = generate_fixed_nonuniform_azimuthal(N, kind=kind)
         return ANGLE_CACHE[key]
     elif azu_unif == 0:
-        key = (name, N, M)
+        key = (kind, N, M)
         if key not in ANGLE_CACHE:
+            if kind in ("rand", "random", "stratified_rand", "stratified_random", "stratified"):
+                np.random.seed(42)
             ANGLE_CACHE[key] = generate_nonuniform_azimuthal(N, M, kind=kind)
         return ANGLE_CACHE[key]
+    return generate_uniform_azimuthal(N)
 
 # ---------------------------------------------------------
 # Core Single Test Execution
@@ -138,34 +143,40 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
 # ---------------------------------------------------------
 def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_Table1", mute=False):
     results = []
-    for method in methods:
+    method_pbar = tqdm(methods, desc=f"Pipeline ({test_type})", disable=False)
+    for method in method_pbar:
+        method_pbar.set_postfix(method=method['name'])
         if not mute:
             print(f"\n{method['label']}")
+
         if test_type == "P1_Table1":
-            for N in N_values:
-                for M in M_values:
-                    res = run_case(N, M, method, bc_choice=1, quad_rule=1, mute=mute)
-                    results.append(res)
-                    if not mute:
-                        print(f"  N={N:4d}, M={M:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
+            pairs = [(N, M) for N in N_values for M in M_values]
+            sub_pbar = tqdm(pairs, desc=f"  {method['label']}", leave=False, disable=False)
+            for N, M in sub_pbar:
+                res = run_case(N, M, method, bc_choice=1, quad_rule=1, mute=mute)
+                results.append(res)
+                if not mute:
+                    print(f"  N={N:4d}, M={M:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
         elif test_type == "P1_Table2":
-            for M in M_values:
-                for quad in [1, 2]:
-                    for bc in [1, 2]:
-                        res = run_case(fixed_other, M, method, bc_choice=bc, quad_rule=quad, mute=mute)
-                        results.append(res)
-                        q_str = "Trapezoidal" if quad == 1 else "Simpson"
-                        bc_str = "Dirichlet" if bc == 1 else "Neumann"
-                        if not mute:
-                            print(f"  M={M:4d}, {q_str}, {bc_str} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
+            tasks = [(M, quad, bc) for M in M_values for quad in [1, 2] for bc in [1, 2]]
+            sub_pbar = tqdm(tasks, desc=f"  {method['label']}", leave=False, disable=False)
+            for M, quad, bc in sub_pbar:
+                res = run_case(fixed_other, M, method, bc_choice=bc, quad_rule=quad, mute=mute)
+                results.append(res)
+                q_str = "Trapezoidal" if quad == 1 else "Simpson"
+                bc_str = "Dirichlet" if bc == 1 else "Neumann"
+                if not mute:
+                    print(f"  M={M:4d}, {q_str}, {bc_str} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
         elif test_type == "Accuracy_VaryN":
-            for N in N_values:
+            sub_pbar = tqdm(N_values, desc=f"  {method['label']}", leave=False, disable=False)
+            for N in sub_pbar:
                 res = run_case(N, fixed_other, method, bc_choice=1, quad_rule=1, mute=mute)
                 results.append(res)
                 if not mute:
                     print(f"  N={N:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
         elif test_type == "Accuracy_VaryM":
-            for M in M_values:
+            sub_pbar = tqdm(M_values, desc=f"  {method['label']}", leave=False, disable=False)
+            for M in sub_pbar:
                 res = run_case(fixed_other, M, method, bc_choice=1, quad_rule=1, mute=mute)
                 results.append(res)
                 if not mute:
@@ -236,6 +247,211 @@ def render_table2_runtime(df, title_prefix="Table 2"):
     """Renders Problem 1 Table 2 runtime with methods grouped."""
     df_fmt = _prepare_table2_df(df)
     render_runtime(df_fmt, "M", ["label", "quad_str", "bc_str"], title_prefix)
+
+
+# ---------------------------------------------------------
+# Standalone Plotting Helpers (Accuracy & Runtime Visualizations)
+# ---------------------------------------------------------
+def plot_accuracy_table1(df, title_prefix="Table 1"):
+    """
+    Generate 6 subplots (2x3 grid) for Table 1 Accuracy:
+    - Top row (3 subplots): Error vs M for FFT, NUDFT, NUFFT
+    - Bottom row (3 subplots): Error vs N for FFT, NUDFT, NUFFT
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    methods = df["label"].unique()
+    
+    m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
+    m_nudft = [m for m in methods if "NUDFT" in m]
+    m_nufft = [m for m in methods if "NUFFT" in m]
+    
+    solver_groups = [("Uniform / FFT", m_fft), ("NUDFT", m_nudft), ("NUFFT", m_nufft)]
+    
+    # Top Row: Error vs M (for each N)
+    for col_idx, (s_name, s_methods) in enumerate(solver_groups):
+        ax = axes[0, col_idx]
+        df_sub = df[df["label"].isin(s_methods)]
+        for N, group in df_sub.groupby("N"):
+            ax.loglog(group["M"], group["L2_rel"], marker="o", label=f"N={N}")
+        ax.set_xlabel("Radial Grid Points (M)")
+        ax.set_ylabel("Relative $L_2$ Error")
+        ax.set_title(f"{title_prefix} - {s_name} (Error vs M)")
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=8)
+
+    # Bottom Row: Error vs N (for each M)
+    for col_idx, (s_name, s_methods) in enumerate(solver_groups):
+        ax = axes[1, col_idx]
+        df_sub = df[df["label"].isin(s_methods)]
+        for M, group in df_sub.groupby("M"):
+            ax.loglog(group["N"], group["L2_rel"], marker="s", label=f"M={M}")
+        ax.set_xlabel("Angular Grid Points (N)")
+        ax.set_ylabel("Relative $L_2$ Error")
+        ax.set_title(f"{title_prefix} - {s_name} (Error vs N)")
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_runtime_table1(df, title_prefix="Table 1"):
+    """
+    Generate 6 subplots (2x3 grid) for Table 1 Runtime:
+    - Top row (3 subplots): Runtime vs M for FFT, NUDFT, NUFFT
+    - Bottom row (3 subplots): Runtime vs N for FFT, NUDFT, NUFFT
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    methods = df["label"].unique()
+    
+    m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
+    m_nudft = [m for m in methods if "NUDFT" in m]
+    m_nufft = [m for m in methods if "NUFFT" in m]
+    
+    solver_groups = [("Uniform / FFT", m_fft), ("NUDFT", m_nudft), ("NUFFT", m_nufft)]
+    
+    # Top Row: Runtime vs M (for each N)
+    for col_idx, (s_name, s_methods) in enumerate(solver_groups):
+        ax = axes[0, col_idx]
+        df_sub = df[df["label"].isin(s_methods)]
+        for N, group in df_sub.groupby("N"):
+            ax.loglog(group["M"], group["runtime"], marker="o", label=f"N={N}")
+        ax.set_xlabel("Radial Grid Points (M)")
+        ax.set_ylabel("Runtime (seconds)")
+        ax.set_title(f"{title_prefix} - {s_name} (Runtime vs M)")
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=8)
+
+    # Bottom Row: Runtime vs N (for each M)
+    for col_idx, (s_name, s_methods) in enumerate(solver_groups):
+        ax = axes[1, col_idx]
+        df_sub = df[df["label"].isin(s_methods)]
+        for M, group in df_sub.groupby("M"):
+            ax.loglog(group["N"], group["runtime"], marker="s", label=f"M={M}")
+        ax.set_xlabel("Angular Grid Points (N)")
+        ax.set_ylabel("Runtime (seconds)")
+        ax.set_title(f"{title_prefix} - {s_name} (Runtime vs N)")
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_accuracy_table2(df, title_prefix="Table 2"):
+    """
+    Generate 4 subplots (2x2 grid) for Table 2 Accuracy:
+    (Trapezoidal/Dirichlet, Trapezoidal/Neumann, Simpson/Dirichlet, Simpson/Neumann)
+    comparing FFT, NUDFT, and NUFFT vs M.
+    """
+    df_fmt = _prepare_table2_df(df)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    combos = [
+        ("Trapezoidal", "Dirichlet", axes[0, 0]),
+        ("Trapezoidal", "Neumann", axes[0, 1]),
+        ("Simpson", "Dirichlet", axes[1, 0]),
+        ("Simpson", "Neumann", axes[1, 1]),
+    ]
+    for q_str, bc_str, ax in combos:
+        df_sub = df_fmt[(df_fmt["quad_str"] == q_str) & (df_fmt["bc_str"] == bc_str)]
+        for label, group in df_sub.groupby("label"):
+            ax.loglog(group["M"], group["L2_rel"], marker="o", label=label)
+        ax.set_xlabel("Radial Grid Points (M)")
+        ax.set_ylabel("Relative $L_2$ Error")
+        ax.set_title(f"{title_prefix} - {q_str}, {bc_str}")
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_runtime_table2(df, title_prefix="Table 2"):
+    """
+    Generate 4 subplots (2x2 grid) for Table 2 Runtime:
+    (Trapezoidal/Dirichlet, Trapezoidal/Neumann, Simpson/Dirichlet, Simpson/Neumann)
+    comparing FFT, NUDFT, and NUFFT vs M.
+    """
+    df_fmt = _prepare_table2_df(df)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    combos = [
+        ("Trapezoidal", "Dirichlet", axes[0, 0]),
+        ("Trapezoidal", "Neumann", axes[0, 1]),
+        ("Simpson", "Dirichlet", axes[1, 0]),
+        ("Simpson", "Neumann", axes[1, 1]),
+    ]
+    for q_str, bc_str, ax in combos:
+        df_sub = df_fmt[(df_fmt["quad_str"] == q_str) & (df_fmt["bc_str"] == bc_str)]
+        for label, group in df_sub.groupby("label"):
+            ax.loglog(group["M"], group["runtime"], marker="s", label=label)
+        ax.set_xlabel("Radial Grid Points (M)")
+        ax.set_ylabel("Runtime (seconds)")
+        ax.set_title(f"{title_prefix} - {q_str}, {bc_str}")
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_accuracy_comparison(df, index_col="N", title_prefix="Accuracy Comparison"):
+    """
+    Generate 3 subplots (1x3 grid) for Accuracy Comparison:
+    Subplot 1: FFT methods (All meshes)
+    Subplot 2: NUDFT methods (All meshes)
+    Subplot 3: NUFFT methods (All meshes)
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    methods = df["label"].unique()
+    
+    m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
+    m_nudft = [m for m in methods if "NUDFT" in m]
+    m_nufft = [m for m in methods if "NUFFT" in m]
+    
+    solver_groups = [("Uniform / FFT", m_fft, axes[0]), ("NUDFT", m_nudft, axes[1]), ("NUFFT", m_nufft, axes[2])]
+    
+    for s_name, s_methods, ax in solver_groups:
+        df_sub = df[df["label"].isin(s_methods)]
+        for label, group in df_sub.groupby("label"):
+            ax.loglog(group[index_col], group["L2_rel"], marker="o", label=label)
+        ax.set_xlabel(f"{index_col} Grid Points")
+        ax.set_ylabel("Relative $L_2$ Error")
+        ax.set_title(f"{title_prefix} - {s_name}")
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_runtime_comparison(df, index_col="N", title_prefix="Accuracy Comparison"):
+    """
+    Generate 3 subplots (1x3 grid) for Runtime Comparison:
+    Subplot 1: FFT methods (All meshes)
+    Subplot 2: NUDFT methods (All meshes)
+    Subplot 3: NUFFT methods (All meshes)
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    methods = df["label"].unique()
+    
+    m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
+    m_nudft = [m for m in methods if "NUDFT" in m]
+    m_nufft = [m for m in methods if "NUFFT" in m]
+    
+    solver_groups = [("Uniform / FFT", m_fft, axes[0]), ("NUDFT", m_nudft, axes[1]), ("NUFFT", m_nufft, axes[2])]
+    
+    for s_name, s_methods, ax in solver_groups:
+        df_sub = df[df["label"].isin(s_methods)]
+        for label, group in df_sub.groupby("label"):
+            ax.loglog(group[index_col], group["runtime"], marker="s", label=label)
+        ax.set_xlabel(f"{index_col} Grid Points")
+        ax.set_ylabel("Runtime (seconds)")
+        ax.set_title(f"{title_prefix} - {s_name}")
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.show()
 
 # ---------------------------------------------------------
 # New Visualization & Plotting Helpers

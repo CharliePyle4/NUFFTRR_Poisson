@@ -23,13 +23,8 @@ def _get_density_weights(theta: np.ndarray) -> np.ndarray:
         w = (th_ext[2:] - th_ext[:-2]) / (4.0 * np.pi)
         return w
     elif theta.ndim == 2:
-        N, M = theta.shape
-        w = np.zeros((N, M), dtype=float)
-        for ell in range(M):
-            th = theta[:, ell]
-            th_ext = np.concatenate(([th[-1] - 2 * np.pi], th, [th[0] + 2 * np.pi]))
-            w[:, ell] = (th_ext[2:] - th_ext[:-2]) / (4.0 * np.pi)
-        return w
+        th_ext = np.vstack(([theta[-1, :] - 2 * np.pi], theta, [theta[0, :] + 2 * np.pi]))
+        return (th_ext[2:, :] - th_ext[:-2, :]) / (4.0 * np.pi)
     return np.ones_like(theta)
 
 
@@ -103,26 +98,39 @@ def _make_nufft_plans(x_wrapped, N_modes, K, eps=1e-12):
 # ---------------------------------------------------------
 # Block CGLS (Conjugate Gradient for Least Squares)
 # ---------------------------------------------------------
-def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=200, damp=1e-9):
+def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, damp=1e-9):
     """
-    Block Conjugate Gradient for Least Squares (CGLS).
+    Block Preconditioned Conjugate Gradient for Least Squares (PCGLS).
     Solves min ||W^{1/2}(AX - B)||_F^2 + damp^2 ||X||_F^2 for a block of vectors.
     """
     N, K = B.shape
-    X = np.zeros_like(B, dtype=np.complex128)
-    R = B.copy()
+    if X_init is not None:
+        X = X_init.astype(np.complex128, copy=True)
+        R = B - A_op(X)
+    else:
+        X = np.zeros((N, K), dtype=np.complex128)
+        R = B.astype(np.complex128, copy=True)
+
     S = AH_op(R)
 
     if damp > 0:
         S -= damp**2 * X
 
-    P = S.copy()
-    gamma = np.sum(np.abs(S)**2)
+    if M_inv is not None:
+        Z = M_inv(S)
+    else:
+        Z = S.copy()
 
-    if gamma == 0.0:
+    P = Z.copy()
+    gamma = np.sum(np.real(np.conj(S) * Z))
+
+    if gamma <= 0.0 or np.isnan(gamma):
         return X
 
-    norm_b_sq = np.sum(np.abs(B)**2)
+    norm_b_cols = np.sqrt(np.sum(np.abs(B)**2, axis=0))
+    col_residuals = np.sqrt(np.sum(np.abs(R)**2, axis=0)) / (norm_b_cols + 1e-14)
+    if np.max(col_residuals) < tol:
+        return X
 
     for _ in range(maxiter):
         Q = A_op(P)
@@ -132,22 +140,35 @@ def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=200, damp=1e-9):
             T_P += damp**2 * P
 
         delta = np.sum(np.real(np.conj(P) * T_P))
-        if delta <= 0:
+        if delta <= 0 or np.isnan(delta):
             break
 
         alpha = gamma / delta
 
         X += alpha * P
         R -= alpha * Q
-        S_new = S - alpha * T_P
+        S -= alpha * T_P
 
-        gamma_new = np.sum(np.abs(S_new)**2)
-
-        if np.sqrt(gamma_new) < tol * np.sqrt(norm_b_sq):
+        col_residuals = np.sqrt(np.sum(np.abs(R)**2, axis=0)) / (norm_b_cols + 1e-14)
+        if np.max(col_residuals) < tol:
             break
 
-        beta = gamma_new / gamma
-        P = S_new + beta * P
+        if M_inv is not None:
+            Z_new = M_inv(S)
+        else:
+            Z_new = S.copy()
+
+        gamma_new = np.sum(np.real(np.conj(S) * Z_new))
+
+        if gamma_new < 1e-28:
+            break
+
+        # Check relative stall (plateau detection)
+        if abs(gamma_new - gamma) / (gamma + 1e-14) < 1e-6:
+            break
+
+        beta = gamma_new / (gamma + 1e-14)
+        P = Z_new + beta * P
         gamma = gamma_new
 
     return X
@@ -160,15 +181,17 @@ def _block_cgls(A_op, AH_op, B, tol=1e-8, maxiter=200, damp=1e-9):
 REG_PARAM = 1e-12  # Tikhonov regularization parameter / condition threshold
 
 
-def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
+def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-7):
     theta_j = np.asarray(theta_j, dtype=float)
-    x_wrapped = _wrap_angles(theta_j)
-    f = np.asarray(f, dtype=np.complex128)
+    f_orig = np.asarray(f, dtype=np.complex128)
     N = theta_j.size
 
-    if f.ndim == 1:
-        f = f[:, None]
-    N_pts, K = f.shape
+    x_wrapped = _wrap_angles(theta_j)
+    if f_orig.ndim == 1:
+        f_arr = f_orig[:, None]
+    else:
+        f_arr = f_orig
+    N_pts, K = f_arr.shape
 
     w = _get_density_weights(theta_j)[:, None]  # (N, 1)
 
@@ -177,6 +200,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
     fwd_in_buf = np.empty((K, N), dtype=np.complex128)
     fwd_out_buf = np.empty((K, N_pts), dtype=np.complex128)
     adj_in_buf = np.empty((K, N_pts), dtype=np.complex128)
+    adj_out_buf = np.empty((K, N), dtype=np.complex128)
 
     def A_op(C_block):
         fwd_in_buf[...] = C_block.T
@@ -185,12 +209,27 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-6):
 
     def AH_op(D_block):
         adj_in_buf[...] = (D_block * w).T
-        return plan_adj.execute(adj_in_buf).T
+        plan_adj.execute(adj_in_buf, out=adj_out_buf)
+        return adj_out_buf.T
 
-    # Solve min ||W^{1/2} (AX - F)||^2 using preconditioned block CGLS
-    X = _block_cgls(A_op, AH_op, f, tol=tol, maxiter=maxiter, damp=REG_PARAM)
+    # 1. Circulant Preconditioner via Point Spread Function (PSF)
+    ones_vec = np.ones((N_pts, 1), dtype=np.complex128)
+    c_psf = AH_op(ones_vec)[:, 0]
+    c_psf_fft = np.fft.ifftshift(c_psf)
+    eig_c = np.abs(np.fft.fft(c_psf_fft)) + 1e-3
 
-    return X[:, 0] if K == 1 else X
+    def M_inv(V):
+        V_shift = np.fft.ifftshift(V, axes=0)
+        V_hat = np.fft.fft(V_shift, axis=0)
+        V_prec_hat = V_hat / eig_c[:, None]
+        return np.fft.fftshift(np.fft.ifft(V_prec_hat, axis=0), axes=0)
+
+    # 2. Density-compensated initial guess (Warm-Start)
+    X0 = AH_op(f_arr)
+
+    # Block PCGLS with FINUFFT operators
+    X = _block_cgls(A_op, AH_op, f_arr, M_inv=M_inv, X_init=X0, tol=tol, maxiter=maxiter, damp=REG_PARAM)
+    return X[:, 0] if f_orig.ndim == 1 else X
 
 
 # ---------------------------------------------------------
@@ -259,18 +298,18 @@ def _invert_nudft_perradius(theta_j, f):
         raise ValueError(f"f must have shape ({N}, {M}), got {f.shape}")
 
     k = np.arange(-N // 2, N // 2, dtype=float)
-    X_all = np.zeros((N, M), dtype=np.complex128)
+    # 3D Tensor of Fourier matrices for all M radii: shape (M, N, N)
+    A_all = np.exp(1j * theta_j.T[:, :, None] * k[None, None, :])
 
-    for ell in range(M):
-        th = theta_j[:, ell]
-        A = np.exp(1j * np.outer(th, k))
-        w = _get_density_weights(th)
-        w_sqrt = np.sqrt(w)
-        A_w = A * w_sqrt[:, None]
-        f_w = f[:, ell] * w_sqrt
-        X_all[:, ell] = lstsq(A_w, f_w, cond=REG_PARAM)[0]
+    w = _get_density_weights(theta_j)   # shape (N, M)
+    w_sqrt_T = np.sqrt(w).T             # shape (M, N)
 
-    return X_all
+    A_w = A_all * w_sqrt_T[:, :, None]  # shape (M, N, N)
+    f_w = f.T * w_sqrt_T                # shape (M, N)
+
+    # Solves all M linear systems simultaneously using batched numpy lstsq
+    X_all = np.linalg.lstsq(A_w, f_w[:, :, None], rcond=REG_PARAM)[0]
+    return X_all.squeeze(-1).T           # shape (N, M)
 
 
 # ---------------------------------------------------------
@@ -278,7 +317,7 @@ def _invert_nudft_perradius(theta_j, f):
 # ---------------------------------------------------------
 def compute_fourier_coeff_nonunif(f_values: np.ndarray,
                                   theta_j: np.ndarray,
-                                  maxiter: int = 200,
+                                  maxiter: int = 50,
                                   tol: float = 1e-8,
                                   use_nudft: bool = False) -> np.ndarray:
     """
@@ -294,7 +333,7 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
         coeff_core = _invert_nudft(theta_j, f_values)
     else:
         coeff_core = _invert_nufft_block_cgls_shared(theta_j, f_values,
-                                                     tol=tol, maxiter=maxiter, eps=tol)
+                                                     tol=tol, maxiter=maxiter, eps=1e-7)
 
     return _pad_coeff_to_Np1(coeff_core, N)
 

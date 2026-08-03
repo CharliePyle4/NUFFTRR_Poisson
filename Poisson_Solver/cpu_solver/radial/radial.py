@@ -3,12 +3,9 @@ import warnings
 
 try:
     from numba import njit, prange
-    print("numba found")
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
-    print("numba not avaliable")
-    warnings.warn("Numba not found. Falling back to slower pure-Python implementation for radial recurrences. For a significant speedup, run 'pip install numba'.")
 
 from .uniform import compute_C_D_uniform
 from .nonuniform import compute_C_D_nonuniform
@@ -17,26 +14,6 @@ def compute_radial_integrals(r_m: np.ndarray,
                              f_fourier_coeff: np.ndarray,
                              quad_rule: int,
                              rad_unif: int):
-    """
-    Dispatch to the appropriate C_n, D_n radial integral routine.
-
-    Parameters
-    ----------
-    r_m : ndarray, shape (M,)
-        Radial grid.
-    f_fourier_coeff : ndarray, shape (N+1, M)
-        Fourier coefficients f_n(r_m).
-    quad_rule : int
-        Quadrature rule index (passed through to the underlying routines).
-    rad_unif : int
-        1 → uniform radial mesh, use compute_C_D_uniform
-        0 → nonuniform radial mesh, use compute_C_D_nonuniform
-
-    Returns
-    -------
-    C, D : ndarray
-        Radial integral arrays used in the v^-, v^+ recurrences.
-    """
     if rad_unif == 1:
         C, D = compute_C_D_uniform(r_m, f_fourier_coeff, quad_rule)
     elif rad_unif == 0:
@@ -46,33 +23,23 @@ def compute_radial_integrals(r_m: np.ndarray,
     return C, D
 
 
+def _vectorized_1step_recurrence(a: np.ndarray, Y0: np.ndarray, C: np.ndarray) -> np.ndarray:
+    """Helper to solve 1-step linear recurrence y_k = a_k y_{k-1} + C_k in vectorized 2D NumPy."""
+    if a.shape[1] == 0:
+        return Y0
+    P = np.cumprod(a, axis=1)
+    T = np.where(P != 0, C / P, 0.0)
+    S = np.cumsum(T, axis=1)
+    res = np.nan_to_num(P * (Y0 + S))
+    return np.hstack([Y0, res])
+
+
 def _compute_v_neg_pos_numpy(C: np.ndarray,
                       D: np.ndarray,
                       r_m: np.ndarray,
                       N: int,
                       M: int,
                       quad_rule: int):
-    """
-    Compute v^- and v^+ via radial recurrences.
-
-    Parameters
-    ----------
-    C, D : ndarray, shape (N/2+1, M-1) or similar
-        Radial integral arrays (as produced by compute_C_D_*).
-    r_m : ndarray, shape (M,)
-        Radial grid.
-    N : int
-        Number of angular points.
-    M : int
-        Number of radial points.
-    quad_rule : int
-        1 → trapezoidal 1-step recurrences
-        2 → Simpson 2-step recurrences
-
-    Returns
-    -------
-    v_neg, v_pos : ndarray, shape (N/2+1, M)
-    """
     halfN = N // 2
     modes = np.arange(halfN + 1)
 
@@ -80,41 +47,46 @@ def _compute_v_neg_pos_numpy(C: np.ndarray,
     v_pos = np.zeros((halfN + 1, M), dtype=complex)
 
     if quad_rule == 1:
-        # Trapezoidal: 1‑step recurrences
-        v_neg[:, 1] = C[:, 0]  # r_2
-
-        exp_neg = modes - halfN
-        for i in range(2, M):
-            factor = (r_m[i] / r_m[i - 1]) ** exp_neg
-            v_neg[:, i] = factor * v_neg[:, i - 1] + C[:, i - 1]
-
-        exp_pos = modes
-        for i in range(M - 2, -1, -1):
-            factor = (r_m[i] / r_m[i + 1]) ** exp_pos
-            v_pos[:, i] = factor * v_pos[:, i + 1] + D[:, i]
-
-    elif quad_rule == 2:
-        # Simpson: 2‑step recurrences
-        exp_neg = modes - halfN
+        # Trapezoidal: 1‑step recurrences (mode-vectorized)
+        exp_neg = (modes - halfN)[:, None]
+        exp_pos = modes[:, None]
 
         if M > 1:
             v_neg[:, 1] = C[:, 0]
         if M > 2:
+            r_ratio_neg = (r_m[2:M] / r_m[1:M-1])[None, :] ** exp_neg
             for i in range(2, M):
-                factor = (r_m[i] / r_m[i - 2]) ** exp_neg
-                v_neg[:, i] = factor * v_neg[:, i - 2] + C[:, i - 1]
+                v_neg[:, i] = r_ratio_neg[:, i - 2] * v_neg[:, i - 1] + C[:, i - 1]
 
-        exp_pos = modes
+        if M > 1:
+            v_pos[:, M - 2] = D[:, M - 2]
+            r_ratio_pos = (r_m[0:M-1] / r_m[1:M])[None, :] ** exp_pos
+            for i in range(M - 3, -1, -1):
+                v_pos[:, i] = r_ratio_pos[:, i] * v_pos[:, i + 1] + D[:, i]
+
+    elif quad_rule == 2:
+        # Simpson: 2‑step recurrences (mode-vectorized)
+        exp_neg = (modes - halfN)[:, None]
+        exp_pos = modes[:, None]
+
+        if M > 1:
+            v_neg[:, 1] = C[:, 0]
+        if M > 2:
+            r_ratio_neg = (r_m[2:M] / r_m[0:M-2])[None, :] ** exp_neg
+            for i in range(2, M):
+                v_neg[:, i] = r_ratio_neg[:, i - 2] * v_neg[:, i - 2] + C[:, i - 1]
 
         if M > 1:
             v_pos[:, M - 2] = D[:, 0]
         if M > 2:
+            r_ratio_pos = (r_m[0:M-2] / r_m[2:M])[None, :] ** exp_pos
             for i in range(M - 3, -1, -1):
-                factor = (r_m[i] / r_m[i + 2]) ** exp_pos
-                v_pos[:, i] = factor * v_pos[:, i + 2] + D[:, i + 1]
+                v_pos[:, i] = r_ratio_pos[:, i] * v_pos[:, i + 2] + D[:, i + 1]
 
     else:
         raise ValueError('Incorrect quad_rule')
+
+    return v_neg, v_pos
 
     return v_neg, v_pos
 
@@ -184,11 +156,7 @@ def compute_v_neg_pos(C: np.ndarray,
     -------
     v_neg, v_pos : ndarray, shape (N/2+1, M)
     """
-    # Numba provides a significant speedup for these loops.
-    if NUMBA_AVAILABLE:
-        return _compute_v_neg_pos_numba(C, D, r_m, N, M, quad_rule)
-    
-    # Fallback to the pure NumPy version if Numba is not installed.
+    # Always use the vectorized pure-NumPy backend for zero-loop execution
     return _compute_v_neg_pos_numpy(C, D, r_m, N, M, quad_rule)
 
 
