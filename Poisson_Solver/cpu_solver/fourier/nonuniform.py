@@ -122,14 +122,18 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
         Z = S.copy()
 
     P = Z.copy()
-    gamma = np.sum(np.real(np.conj(S) * Z))
+    gamma = np.vdot(S, Z).real
 
     if gamma <= 0.0 or np.isnan(gamma):
         return X
 
-    norm_b_cols = np.sqrt(np.sum(np.abs(B)**2, axis=0))
-    col_residuals = np.sqrt(np.sum(np.abs(R)**2, axis=0)) / (norm_b_cols + 1e-14)
-    if np.max(col_residuals) < tol:
+    # Precompute squared norms for exactly equivalent convergence checks without sqrt
+    norm_b_sq = np.einsum('ij,ij->j', B.real, B.real) + np.einsum('ij,ij->j', B.imag, B.imag)
+    norm_b_denom_sq = (np.sqrt(norm_b_sq) + 1e-14)**2
+    tol2 = tol * tol
+
+    col_res_sq = np.einsum('ij,ij->j', R.real, R.real) + np.einsum('ij,ij->j', R.imag, R.imag)
+    if np.max(col_res_sq / norm_b_denom_sq) < tol2:
         return X
 
     for _ in range(maxiter):
@@ -141,7 +145,7 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
         else:
             T_P = AHQ
 
-        delta = np.sum(np.real(np.conj(P) * T_P))
+        delta = np.vdot(P, T_P).real
         if delta <= 0 or np.isnan(delta):
             break
 
@@ -151,8 +155,8 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
         R -= alpha * Q
         S -= alpha * AHQ  # S tracks A^H R — only use undamped AHQ
 
-        col_residuals = np.sqrt(np.sum(np.abs(R)**2, axis=0)) / (norm_b_cols + 1e-14)
-        if np.max(col_residuals) < tol:
+        col_res_sq = np.einsum('ij,ij->j', R.real, R.real) + np.einsum('ij,ij->j', R.imag, R.imag)
+        if np.max(col_res_sq / norm_b_denom_sq) < tol2:
             break
 
         if M_inv is not None:
@@ -160,7 +164,7 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
         else:
             Z_new = S.copy()
 
-        gamma_new = np.sum(np.real(np.conj(S) * Z_new))
+        gamma_new = np.vdot(S, Z_new).real
 
         if gamma_new < 1e-28:
             break
@@ -170,7 +174,8 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
             break
 
         beta = gamma_new / (gamma + 1e-14)
-        P = Z_new + beta * P
+        P *= beta
+        P += Z_new
         gamma = gamma_new
 
     return X
