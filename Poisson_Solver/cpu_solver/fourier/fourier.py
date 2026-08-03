@@ -1,3 +1,4 @@
+from openpyxl.chartsheet import relation
 import numpy as np
 import finufft
 
@@ -235,13 +236,12 @@ def compute_u_fourier_coefficients(v: np.ndarray,
     ratio = (r_m / R)[None, :]          # (1, M)
 
     if BC_choice == 1:
-        B = ratio ** kabs * (
-            g_full[mask, None] - v[mask, M - 1][:, None]
-        )
+        rp = ratio ** kabs                                    # compute once
+        B = rp * (g_full[mask, None] - v[mask, M - 1][:, None])
         u_fourier_coeff[mask, :] = v[mask, :] + B
     elif BC_choice == 2:
-        B = ratio ** kabs * (R / kabs) * g_full[mask, None] \
-            + ratio ** kabs * v[mask, M - 1][:, None]
+        rp = ratio ** kabs                                    # compute once (was twice!)
+        B = rp * ((R / kabs) * g_full[mask, None] + v[mask, M - 1][:, None])
         u_fourier_coeff[mask, :] = v[mask, :] + B
 
     return u_fourier_coeff

@@ -103,15 +103,15 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
     Block Preconditioned Conjugate Gradient for Least Squares (PCGLS).
     Solves min ||W^{1/2}(AX - B)||_F^2 + damp^2 ||X||_F^2 for a block of vectors.
     """
-    N, K = B.shape
+    K_size, N_size = B.shape
     if X_init is not None:
         X = X_init.astype(np.complex128, copy=True)
         R = B - A_op(X)
     else:
-        X = np.zeros((N, K), dtype=np.complex128)
+        X = np.zeros((K_size, N_size), dtype=np.complex128)
         R = B.astype(np.complex128, copy=True)
 
-    S = AH_op(R)
+    S = AH_op(R).copy()
 
     if damp > 0:
         S -= damp**2 * X
@@ -128,20 +128,26 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
         return X
 
     # Precompute squared norms for exactly equivalent convergence checks without sqrt
-    norm_b_sq = np.einsum('ij,ij->j', B.real, B.real) + np.einsum('ij,ij->j', B.imag, B.imag)
+    norm_b_sq = np.einsum('ij,ij->i', B.real, B.real) + np.einsum('ij,ij->i', B.imag, B.imag)
     norm_b_denom_sq = (np.sqrt(norm_b_sq) + 1e-14)**2
     tol2 = tol * tol
 
-    col_res_sq = np.einsum('ij,ij->j', R.real, R.real) + np.einsum('ij,ij->j', R.imag, R.imag)
+    col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
     if np.max(col_res_sq / norm_b_denom_sq) < tol2:
         return X
+
+    damp2 = damp * damp
+    use_damp = damp > 0
+    T_P_buf = np.empty_like(B)
 
     for _ in range(maxiter):
         Q = A_op(P)
         AHQ = AH_op(Q)  # A^H * A * P (undamped)
 
-        if damp > 0:
-            T_P = AHQ + damp**2 * P
+        if use_damp:
+            np.multiply(P, damp2, out=T_P_buf)
+            T_P_buf += AHQ
+            T_P = T_P_buf
         else:
             T_P = AHQ
 
@@ -155,7 +161,7 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
         R -= alpha * Q
         S -= alpha * AHQ  # S tracks A^H R — only use undamped AHQ
 
-        col_res_sq = np.einsum('ij,ij->j', R.real, R.real) + np.einsum('ij,ij->j', R.imag, R.imag)
+        col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
         if np.max(col_res_sq / norm_b_denom_sq) < tol2:
             break
 
@@ -188,7 +194,7 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
 REG_PARAM = 1e-12  # Tikhonov regularization parameter / condition threshold
 
 
-def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12):
+def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
     theta_j = np.asarray(theta_j, dtype=float)
     f_orig = np.asarray(f, dtype=np.complex128)
     N = theta_j.size
@@ -204,35 +210,36 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12)
 
     plan_fwd, plan_adj = _make_nufft_plans(x_wrapped, N_modes=N, K=K, eps=eps)
 
-    fwd_in_buf = np.empty((K, N), dtype=np.complex128)
     fwd_out_buf = np.empty((K, N_pts), dtype=np.complex128)
     adj_in_buf = np.empty((K, N_pts), dtype=np.complex128)
     adj_out_buf = np.empty((K, N), dtype=np.complex128)
+    w_row = w.T  # (1, N)
 
     def A_op(C_block):
-        fwd_in_buf[...] = C_block.T
-        plan_fwd.execute(fwd_in_buf, out=fwd_out_buf)
-        return fwd_out_buf.T.copy()
+        plan_fwd.execute(C_block, out=fwd_out_buf)
+        return fwd_out_buf
 
     def AH_op(D_block):
-        adj_in_buf[...] = (D_block * w).T
+        np.multiply(D_block, w_row, out=adj_in_buf)
         plan_adj.execute(adj_in_buf, out=adj_out_buf)
-        return adj_out_buf.T.copy()
+        return adj_out_buf
 
     # 1. Circulant Preconditioner via Point Spread Function (PSF)
-    ones_vec = np.ones((N_pts, 1), dtype=np.complex128)
-    c_psf = AH_op(ones_vec)[:, 0]
+    ones_vec = np.ones((1, N_pts), dtype=np.complex128)
+    c_psf = AH_op(ones_vec)[0, :]
     c_psf_fft = np.fft.ifftshift(c_psf)
     eig_c = np.abs(np.fft.fft(c_psf_fft)) + 1e-3
+    eig_c_inv = (1.0 / eig_c)[None, :]
 
     def M_inv(V):
-        V_shift = np.fft.ifftshift(V, axes=0)
-        V_hat = np.fft.fft(V_shift, axis=0)
-        V_prec_hat = V_hat / eig_c[:, None]
-        return np.fft.fftshift(np.fft.ifft(V_prec_hat, axis=0), axes=0)
+        V_shift = np.fft.ifftshift(V, axes=1)
+        V_hat = np.fft.fft(V_shift, axis=1)
+        V_hat *= eig_c_inv
+        return np.fft.fftshift(np.fft.ifft(V_hat, axis=1), axes=1)
 
     # Block PCGLS with FINUFFT operators (no warm-start: zero init avoids overflow from misscaled X0)
-    X = _block_cgls(A_op, AH_op, f_arr, M_inv=M_inv, X_init=None, tol=tol, maxiter=maxiter, damp=REG_PARAM)
+    X_T = _block_cgls(A_op, AH_op, f_arr.T, M_inv=M_inv, X_init=None, tol=tol, maxiter=maxiter, damp=REG_PARAM)
+    X = X_T.T
     return X[:, 0] if f_orig.ndim == 1 else X
 
 
