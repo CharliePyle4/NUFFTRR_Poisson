@@ -188,8 +188,73 @@ def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, d
 
 
 # ---------------------------------------------------------
-# Invert NUFFT via Block CGLS — shared mesh (azu_unif == 1)
-# One plan for all M radii simultaneously with density compensation weighting.
+# Block CG (Conjugate Gradient for Normal Equations)
+# ---------------------------------------------------------
+def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
+    """
+    Block Conjugate Gradient for solving symmetric positive definite systems T * X = B.
+    B has shape (K, N).
+    """
+    X = np.zeros_like(B)
+    R = B.copy()
+    
+    if M_inv is not None:
+        Z = M_inv(R)
+    else:
+        Z = R.copy()
+        
+    P = Z.copy()
+    gamma = np.vdot(R, Z).real
+    
+    if gamma <= 0.0 or np.isnan(gamma):
+        return X
+        
+    norm_b_sq = np.einsum('ij,ij->i', B.real, B.real) + np.einsum('ij,ij->i', B.imag, B.imag)
+    norm_b_denom_sq = (np.sqrt(norm_b_sq) + 1e-14)**2
+    tol2 = tol * tol
+    
+    col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
+    if np.max(col_res_sq / norm_b_denom_sq) < tol2:
+        return X
+        
+    for _ in range(maxiter):
+        TP = T_op(P)
+        delta = np.vdot(P, TP).real
+        if delta <= 0 or np.isnan(delta):
+            break
+            
+        alpha = gamma / delta
+        
+        X += alpha * P
+        R -= alpha * TP
+        
+        col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
+        if np.max(col_res_sq / norm_b_denom_sq) < tol2:
+            break
+            
+        if M_inv is not None:
+            Z_new = M_inv(R)
+        else:
+            Z_new = R.copy()
+            
+        gamma_new = np.vdot(R, Z_new).real
+        if gamma_new < 1e-28:
+            break
+            
+        if abs(gamma_new - gamma) / (gamma + 1e-14) < 1e-6:
+            break
+            
+        beta = gamma_new / (gamma + 1e-14)
+        P *= beta
+        P += Z_new
+        gamma = gamma_new
+        
+    return X
+
+
+# ---------------------------------------------------------
+# Invert NUFFT via Block CG & Toeplitz Embedding — shared mesh (azu_unif == 1)
+# Solves the normal equations using fast convolutions instead of FINUFFT calls.
 # ---------------------------------------------------------
 REG_PARAM = 1e-12  # Tikhonov regularization parameter / condition threshold
 
@@ -206,27 +271,27 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
         f_arr = f_orig
     N_pts, K = f_arr.shape
 
-    w = _get_density_weights(theta_j)[:, None]  # (N, 1)
+    w = _get_density_weights(theta_j)[:, None]  # (N_pts, 1)
 
-    plan_fwd, plan_adj = _make_nufft_plans(x_wrapped, N_modes=N, K=K, eps=eps)
+    # 1. Compute RHS: B_adj = A^H W f  (1 FINUFFT Adjoint)
+    f_w = f_arr * w
+    B_adj = _nufft_adjoint(x_wrapped, f_w, N_modes=N, eps=eps).T  # (K, N)
 
-    fwd_out_buf = np.empty((K, N_pts), dtype=np.complex128)
-    adj_in_buf = np.empty((K, N_pts), dtype=np.complex128)
-    adj_out_buf = np.empty((K, N), dtype=np.complex128)
-    w_row = w.T  # (1, N)
+    # 2. Compute Toeplitz kernel from weights (1 FINUFFT Adjoint, double resolution)
+    v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps)  # (2N,)
+    v_shift = np.fft.ifftshift(v_raw)
+    V_hat = np.fft.fft(v_shift)[None, :]  # (1, 2N)
 
-    def A_op(C_block):
-        plan_fwd.execute(C_block, out=fwd_out_buf)
-        return fwd_out_buf
+    # 3. Fast Toeplitz Matrix-Vector Multiplication via FFT
+    def T_op(X):
+        X_pad = np.zeros((K, 2*N), dtype=np.complex128)
+        X_pad[:, :N] = X
+        X_hat = np.fft.fft(X_pad, axis=1)
+        Y_pad = np.fft.ifft(X_hat * V_hat, axis=1)
+        return Y_pad[:, :N] + (REG_PARAM**2) * X
 
-    def AH_op(D_block):
-        np.multiply(D_block, w_row, out=adj_in_buf)
-        plan_adj.execute(adj_in_buf, out=adj_out_buf)
-        return adj_out_buf
-
-    # 1. Circulant Preconditioner via Point Spread Function (PSF)
-    ones_vec = np.ones((1, N_pts), dtype=np.complex128)
-    c_psf = AH_op(ones_vec)[0, :]
+    # 4. Circulant Preconditioner via Point Spread Function (PSF)
+    c_psf = v_raw[N // 2 : N // 2 + N]
     c_psf_fft = np.fft.ifftshift(c_psf)
     eig_c = np.abs(np.fft.fft(c_psf_fft)) + 1e-3
     eig_c_inv = (1.0 / eig_c)[None, :]
@@ -237,8 +302,8 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
         V_hat *= eig_c_inv
         return np.fft.fftshift(np.fft.ifft(V_hat, axis=1), axes=1)
 
-    # Block PCGLS with FINUFFT operators (no warm-start: zero init avoids overflow from misscaled X0)
-    X_T = _block_cgls(A_op, AH_op, f_arr.T, M_inv=M_inv, X_init=None, tol=tol, maxiter=maxiter, damp=REG_PARAM)
+    # 5. Solve using Block CG (Normal Equations)
+    X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
     X = X_T.T
     return X[:, 0] if f_orig.ndim == 1 else X
 

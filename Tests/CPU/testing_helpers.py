@@ -297,42 +297,52 @@ def plot_accuracy_table1(df, title_prefix="Table 1"):
 
 def plot_runtime_table1(df, title_prefix="Table 1"):
     """
-    Generate 6 subplots (2x3 grid) for Table 1 Runtime:
-    - Top row (3 subplots): Runtime vs M for FFT, NUDFT, NUFFT
-    - Bottom row (3 subplots): Runtime vs N for FFT, NUDFT, NUFFT
+    Generate 2xN grid for Table 1 Runtime:
+    - Top row: Runtime vs M, one subplot for each N. Each plot has the 3 methods.
+    - Bottom row: Runtime vs N, one subplot for each M. Each plot has the 3 methods.
     """
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    methods = df["label"].unique()
+    N_vals = sorted(df["N"].unique())
+    M_vals = sorted(df["M"].unique())
     
-    m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
-    m_nudft = [m for m in methods if "NUDFT" in m]
-    m_nufft = [m for m in methods if "NUFFT" in m]
+    num_cols = max(len(N_vals), len(M_vals))
     
-    solver_groups = [("Uniform / FFT", m_fft), ("NUDFT", m_nudft), ("NUFFT", m_nufft)]
+    fig, axes = plt.subplots(2, num_cols, figsize=(5 * num_cols, 10))
     
-    # Top Row: Runtime vs M (for each N)
-    for col_idx, (s_name, s_methods) in enumerate(solver_groups):
-        ax = axes[0, col_idx]
-        df_sub = df[df["label"].isin(s_methods)]
-        for N, group in df_sub.groupby("N"):
-            ax.loglog(group["M"], group["runtime"], marker="o", label=f"N={N}")
+    # Ensure axes is 2D even if num_cols is 1
+    if num_cols == 1:
+        axes = axes.reshape(2, 1)
+    
+    # Top Row: Runtime vs M for each N
+    for i, N in enumerate(N_vals):
+        ax = axes[0, i]
+        df_sub = df[df["N"] == N]
+        for label, group in df_sub.groupby("label"):
+            group = group.sort_values("M")
+            ax.loglog(group["M"], group["runtime"], marker="o", label=label)
         ax.set_xlabel("Radial Grid Points (M)")
         ax.set_ylabel("Runtime (seconds)")
-        ax.set_title(f"{title_prefix} - {s_name} (Runtime vs M)")
+        ax.set_title(f"{title_prefix} (N={N}) - Runtime vs M")
         ax.grid(True, which="both", ls="--", alpha=0.5)
         ax.legend(fontsize=8)
+        
+    for i in range(len(N_vals), num_cols):
+        axes[0, i].axis('off')
 
-    # Bottom Row: Runtime vs N (for each M)
-    for col_idx, (s_name, s_methods) in enumerate(solver_groups):
-        ax = axes[1, col_idx]
-        df_sub = df[df["label"].isin(s_methods)]
-        for M, group in df_sub.groupby("M"):
-            ax.loglog(group["N"], group["runtime"], marker="s", label=f"M={M}")
+    # Bottom Row: Runtime vs N for each M
+    for i, M in enumerate(M_vals):
+        ax = axes[1, i]
+        df_sub = df[df["M"] == M]
+        for label, group in df_sub.groupby("label"):
+            group = group.sort_values("N")
+            ax.loglog(group["N"], group["runtime"], marker="s", label=label)
         ax.set_xlabel("Angular Grid Points (N)")
         ax.set_ylabel("Runtime (seconds)")
-        ax.set_title(f"{title_prefix} - {s_name} (Runtime vs N)")
+        ax.set_title(f"{title_prefix} (M={M}) - Runtime vs N")
         ax.grid(True, which="both", ls="--", alpha=0.5)
         ax.legend(fontsize=8)
+        
+    for i in range(len(M_vals), num_cols):
+        axes[1, i].axis('off')
 
     plt.tight_layout()
     plt.show()
