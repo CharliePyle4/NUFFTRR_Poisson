@@ -1,6 +1,8 @@
 import numpy as np
 import finufft
 from scipy.linalg import lstsq
+import pyfftw
+import multiprocessing
 import scipy.fft as sp_fft
 from scipy.sparse.linalg import LinearOperator, lsqr
 
@@ -279,31 +281,54 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
     B_adj = _nufft_adjoint(x_wrapped, f_w, N_modes=N, eps=eps).T  # (K, N)
 
     # 2. Compute Toeplitz kernel from weights (1 FINUFFT Adjoint, double resolution)
+    import multiprocessing
+    n_threads = multiprocessing.cpu_count()
+
     v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps)  # (2N,)
-    v_shift = sp_fft.ifftshift(v_raw)
-    V_hat = sp_fft.fft(v_shift)[None, :]  # (1, 2N)
+    v_shift = np.fft.ifftshift(v_raw)
+    V_hat = np.fft.fft(v_shift)[None, :]  # (1, 2N)
+
+    # Pre-allocate aligned arrays and build FFTW plans for T_op
+    T_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
+    T_hat = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
+    fft_T = pyfftw.FFTW(T_in, T_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads)
+
+    T_ifft_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
+    T_out = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
+    ifft_T = pyfftw.FFTW(T_ifft_in, T_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads)
 
     # 3. Fast Toeplitz Matrix-Vector Multiplication via FFT
     def T_op(X):
-        # X: (K, 2N)
-        X_pad = np.zeros((K, 2*N), dtype=np.complex128)
-        X_pad[:, :N] = X
-        X_hat = sp_fft.fft(X_pad, axis=1, workers=-1)
-        Y_pad = sp_fft.ifft(X_hat * V_hat, axis=1, workers=-1)
-        # return the first N components of each row
-        return Y_pad[:, :N] + (REG_PARAM**2) * X
+        # X: (K, N)
+        T_in[:] = 0.0
+        T_in[:, :N] = X
+        fft_T.execute()
+        T_ifft_in[:] = T_hat * V_hat
+        ifft_T.execute()
+        # return the first N components of each row, scaling by 1/(2N) for the unnormalized IFFT
+        return (T_out[:, :N].copy() / (2.0 * N)) + (REG_PARAM**2) * X
 
     # 4. Circulant Preconditioner via Point Spread Function (PSF)
     c_psf = v_raw[N // 2 : N // 2 + N]
-    c_psf_fft = sp_fft.ifftshift(c_psf)
-    eig_c = np.abs(sp_fft.fft(c_psf_fft)) + 1e-3
+    c_psf_fft = np.fft.ifftshift(c_psf)
+    eig_c = np.abs(np.fft.fft(c_psf_fft)) + 1e-3
     eig_c_inv = (1.0 / eig_c)[None, :]
 
+    M_in = pyfftw.empty_aligned((K, N), dtype='complex128')
+    M_hat = pyfftw.empty_aligned((K, N), dtype='complex128')
+    fft_M = pyfftw.FFTW(M_in, M_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads)
+
+    M_ifft_in = pyfftw.empty_aligned((K, N), dtype='complex128')
+    M_out = pyfftw.empty_aligned((K, N), dtype='complex128')
+    ifft_M = pyfftw.FFTW(M_ifft_in, M_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads)
+
     def M_inv(V):
-        V_shift = np.fft.ifftshift(V, axes=1)
-        V_hat = sp_fft.fft(V_shift, axis=1, workers=-1)
-        V_hat *= eig_c_inv
-        return np.fft.fftshift(sp_fft.ifft(V_hat, axis=1, workers=-1), axes=1)
+        M_in[:] = np.fft.ifftshift(V, axes=1)
+        fft_M.execute()
+        M_ifft_in[:] = M_hat * eig_c_inv
+        ifft_M.execute()
+        # scale by 1/N for the unnormalized IFFT
+        return np.fft.fftshift(M_out / N, axes=1).copy()
 
     # 5. Solve using Block CG (Normal Equations)
     X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
