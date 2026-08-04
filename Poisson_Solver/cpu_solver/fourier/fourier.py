@@ -139,9 +139,10 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
     halfN = N // 2
 
     if azu_unif == 2:
+        import scipy.fft as sp_fft
         coeff    = np.vstack([u_fourier_coeff[halfN:N, :],
                               u_fourier_coeff[0:halfN, :]])
-        u_approx = np.fft.ifft(coeff, axis=0) * N
+        u_approx = sp_fft.ifft(coeff, axis=0, workers=-1) * N
         return u_approx
 
     elif azu_unif == 1:

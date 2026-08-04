@@ -1,6 +1,7 @@
 import numpy as np
 import finufft
 from scipy.linalg import lstsq
+import scipy.fft as sp_fft
 from scipy.sparse.linalg import LinearOperator, lsqr
 
 
@@ -279,28 +280,30 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
 
     # 2. Compute Toeplitz kernel from weights (1 FINUFFT Adjoint, double resolution)
     v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps)  # (2N,)
-    v_shift = np.fft.ifftshift(v_raw)
-    V_hat = np.fft.fft(v_shift)[None, :]  # (1, 2N)
+    v_shift = sp_fft.ifftshift(v_raw)
+    V_hat = sp_fft.fft(v_shift)[None, :]  # (1, 2N)
 
     # 3. Fast Toeplitz Matrix-Vector Multiplication via FFT
     def T_op(X):
+        # X: (K, 2N)
         X_pad = np.zeros((K, 2*N), dtype=np.complex128)
         X_pad[:, :N] = X
-        X_hat = np.fft.fft(X_pad, axis=1)
-        Y_pad = np.fft.ifft(X_hat * V_hat, axis=1)
+        X_hat = sp_fft.fft(X_pad, axis=1, workers=-1)
+        Y_pad = sp_fft.ifft(X_hat * V_hat, axis=1, workers=-1)
+        # return the first N components of each row
         return Y_pad[:, :N] + (REG_PARAM**2) * X
 
     # 4. Circulant Preconditioner via Point Spread Function (PSF)
     c_psf = v_raw[N // 2 : N // 2 + N]
-    c_psf_fft = np.fft.ifftshift(c_psf)
-    eig_c = np.abs(np.fft.fft(c_psf_fft)) + 1e-3
+    c_psf_fft = sp_fft.ifftshift(c_psf)
+    eig_c = np.abs(sp_fft.fft(c_psf_fft)) + 1e-3
     eig_c_inv = (1.0 / eig_c)[None, :]
 
     def M_inv(V):
         V_shift = np.fft.ifftshift(V, axes=1)
-        V_hat = np.fft.fft(V_shift, axis=1)
+        V_hat = sp_fft.fft(V_shift, axis=1, workers=-1)
         V_hat *= eig_c_inv
-        return np.fft.fftshift(np.fft.ifft(V_hat, axis=1), axes=1)
+        return np.fft.fftshift(sp_fft.ifft(V_hat, axis=1, workers=-1), axes=1)
 
     # 5. Solve using Block CG (Normal Equations)
     X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
