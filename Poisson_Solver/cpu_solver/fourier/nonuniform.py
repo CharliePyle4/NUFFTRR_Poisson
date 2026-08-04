@@ -237,15 +237,8 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
         V_hat *= eig_c_inv
         return np.fft.fftshift(np.fft.ifft(V_hat, axis=1), axes=1)
 
-    # 2. Warm Start (Nearest-Neighbor Gridding)
-    idx = np.round(x_wrapped * N / (2 * np.pi)).astype(int) % N
-    f_weighted = f_arr.T * w_row
-    f_unif = np.zeros((K, N), dtype=np.complex128)
-    np.add.at(f_unif, (slice(None), idx), f_weighted)
-    X_init = np.fft.fftshift(np.fft.fft(f_unif, axis=1), axes=1)
-
-    # Block PCGLS with FINUFFT operators
-    X_T = _block_cgls(A_op, AH_op, f_arr.T, M_inv=M_inv, X_init=X_init, tol=tol, maxiter=maxiter, damp=REG_PARAM)
+    # Block PCGLS with FINUFFT operators (no warm-start: zero init avoids overflow from misscaled X0)
+    X_T = _block_cgls(A_op, AH_op, f_arr.T, M_inv=M_inv, X_init=None, tol=tol, maxiter=maxiter, damp=REG_PARAM)
     X = X_T.T
     return X[:, 0] if f_orig.ndim == 1 else X
 
