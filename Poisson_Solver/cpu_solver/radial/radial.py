@@ -1,11 +1,7 @@
 import numpy as np
 import warnings
 
-try:
-    from numba import njit, prange
-    NUMBA_AVAILABLE = True
-except ImportError:
-    NUMBA_AVAILABLE = False
+
 
 from .uniform import compute_C_D_uniform
 from .nonuniform import compute_C_D_nonuniform
@@ -79,15 +75,39 @@ def _compute_v_neg_pos_numpy(C: np.ndarray,
             v_neg[:, 1] = C[:, 0]
         if M > 2:
             r_ratio_neg = (r_m[2:M] / r_m[0:M-2])[None, :] ** exp_neg
-            for i in range(2, M):
-                v_neg[:, i] = r_ratio_neg[:, i - 2] * v_neg[:, i - 2] + C[:, i - 1]
+            
+            v_neg[:, 2] = r_ratio_neg[:, 0] * v_neg[:, 0] + C[:, 1]
+            
+            if M > 4:
+                a_even = r_ratio_neg[:, 2::2]
+                C_even = C[:, 3:M-1:2]
+                res_even = _vectorized_1step_recurrence(a_even, v_neg[:, 2:3], C_even)
+                v_neg[:, 2:M:2] = res_even
+
+            if M > 3:
+                a_odd = r_ratio_neg[:, 1::2]
+                C_odd = C[:, 2:M-1:2]
+                res_odd = _vectorized_1step_recurrence(a_odd, v_neg[:, 1:2], C_odd)
+                v_neg[:, 1:M:2] = res_odd
 
         if M > 1:
             v_pos[:, M - 2] = D[:, 0]
         if M > 2:
             r_ratio_pos = (r_m[0:M-2] / r_m[2:M])[None, :] ** exp_pos
-            for i in range(M - 3, -1, -1):
-                v_pos[:, i] = r_ratio_pos[:, i] * v_pos[:, i + 2] + D[:, i + 1]
+            
+            a_seq1 = r_ratio_pos[:, M-3:0:-2]
+            C_seq1 = D[:, M-2:1:-2]
+            Y0_1 = v_pos[:, M-1:M]
+            res_seq1 = _vectorized_1step_recurrence(a_seq1, Y0_1, C_seq1)
+            v_pos[:, M-1:0:-2] = res_seq1
+
+            a_seq2 = r_ratio_pos[:, M-4:0:-2]
+            C_seq2 = D[:, M-3:1:-2]
+            Y0_2 = v_pos[:, M-2:M-1]
+            res_seq2 = _vectorized_1step_recurrence(a_seq2, Y0_2, C_seq2)
+            v_pos[:, M-2:0:-2] = res_seq2
+
+            v_pos[:, 0] = r_ratio_pos[:, 0] * v_pos[:, 2] + D[:, 1]
 
     else:
         raise ValueError('Incorrect quad_rule')
@@ -97,49 +117,7 @@ def _compute_v_neg_pos_numpy(C: np.ndarray,
     return v_neg, v_pos
 
 
-if NUMBA_AVAILABLE:
-    @njit(cache=True, parallel=True)
-    def _compute_v_neg_pos_numba(C, D, r_m, N, M, quad_rule):
-        """Numba-accelerated implementation of the radial recurrences."""
-        halfN = N // 2
-        v_neg = np.zeros((halfN + 1, M), dtype=np.complex128)
-        v_pos = np.zeros((halfN + 1, M), dtype=np.complex128)
 
-        # The outer loop over modes is independent and can be parallelized.
-        for n in prange(halfN + 1):
-            if quad_rule == 1:
-                # Trapezoidal: 1-step recurrences
-                exp_neg = float(n - halfN)
-                if M > 1:
-                    v_neg[n, 1] = C[n, 0]
-                for i in range(2, M):
-                    # r_m[0]=0, but loop starts at i=2, so r_m[i-1] >= r_m[1] > 0
-                    factor = (r_m[i] / r_m[i - 1]) ** exp_neg
-                    v_neg[n, i] = factor * v_neg[n, i - 1] + C[n, i - 1]
-
-                exp_pos = float(n)
-                for i in range(M - 2, -1, -1):
-                    factor = (r_m[i] / r_m[i + 1]) ** exp_pos
-                    v_pos[n, i] = factor * v_pos[n, i + 1] + D[n, i]
-
-            elif quad_rule == 2:
-                # Simpson: 2-step recurrences
-                exp_neg = float(n - halfN)
-                if M > 1:
-                    v_neg[n, 1] = C[n, 0]
-                if M > 2:
-                    for i in range(2, M):
-                        factor = (r_m[i] / r_m[i - 2]) ** exp_neg
-                        v_neg[n, i] = factor * v_neg[n, i - 2] + C[n, i - 1]
-
-                exp_pos = float(n)
-                if M > 1:
-                    v_pos[n, M - 2] = D[n, 0]
-                if M > 2:
-                    for i in range(M - 3, -1, -1):
-                        factor = (r_m[i] / r_m[i + 2]) ** exp_pos
-                        v_pos[n, i] = factor * v_pos[n, i + 2] + D[n, i + 1]
-        return v_neg, v_pos
 
 
 def compute_v_neg_pos(C: np.ndarray,
@@ -150,11 +128,6 @@ def compute_v_neg_pos(C: np.ndarray,
                       quad_rule: int):
     """
     Compute v^- and v^+ via radial recurrences.
-
-    This function dispatches to a Numba-JIT compiled version for performance
-    if `numba` is installed, otherwise it falls back to a slower pure-NumPy
-    implementation. The recurrences are inherently sequential in the radial
-    direction, making them a bottleneck that benefits greatly from JIT compilation.
 
     Parameters are passed to the appropriate backend.
 

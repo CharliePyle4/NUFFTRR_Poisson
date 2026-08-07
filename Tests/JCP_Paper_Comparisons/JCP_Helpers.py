@@ -234,6 +234,16 @@ def display_timing(df_table1, methods, N_values, M_values):
         print(f"\n{'='*80}\n{method['label']} : TABLE 1 (Timing)\n{'='*80}")
         display(df_table1[df_table1["method"] == name].pivot(index="N", columns="M", values="time").reindex(index=N_values, columns=M_values).map(dash_if_nan))
 
+def display_timing_2(df_table2, methods, N_values, M_values):
+    def dash_if_nan(x):
+        return "—" if pd.isna(x) else f"{x:.1e}"
+
+    for method in methods:
+        name = method["name"]
+        print(f"\n{'='*80}\n{method['label']} : TABLE 2 (Timing)\n{'='*80}")
+        df2 = df_table2[df_table2["method"] == name]
+        display(pd.concat({(q.capitalize() + " rule", b.capitalize(), "Time"): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")["time"] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"]}, axis=1).reindex(M_values).map(dash_if_nan))
+
 def display_table_2(df_table2, methods, N_values, M_values):
     def dash_if_nan(x):
         return "—" if pd.isna(x) else f"{x:.1e}"
