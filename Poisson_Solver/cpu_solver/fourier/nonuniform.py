@@ -4,7 +4,6 @@ from scipy.linalg import lstsq
 import pyfftw
 import multiprocessing
 import scipy.fft as sp_fft
-from scipy.sparse.linalg import LinearOperator, lsqr
 
 
 # ---------------------------------------------------------
@@ -25,9 +24,6 @@ def _get_density_weights(theta: np.ndarray) -> np.ndarray:
         th_ext = np.concatenate(([theta[-1] - 2 * np.pi], theta, [theta[0] + 2 * np.pi]))
         w = (th_ext[2:] - th_ext[:-2]) / (4.0 * np.pi)
         return w
-    elif theta.ndim == 2:
-        th_ext = np.vstack(([theta[-1, :] - 2 * np.pi], theta, [theta[0, :] + 2 * np.pi]))
-        return (th_ext[2:, :] - th_ext[:-2, :]) / (4.0 * np.pi)
     return np.ones_like(theta)
 
 
@@ -83,111 +79,6 @@ def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
         raise ValueError("x_wrapped length must equal first dim of f")
     f_KM = np.ascontiguousarray(f.T, dtype=np.complex128)
     return finufft.nufft1d1(x, f_KM, n_modes=N_modes, isign=-1, eps=eps).T
-
-
-# ---------------------------------------------------------
-# NUFFT Plan helpers for block CG
-# ---------------------------------------------------------
-def _make_nufft_plans(x_wrapped, N_modes, K, eps=1e-12):
-    x = np.ascontiguousarray(x_wrapped, dtype=float)
-    n_modes_tuple = (int(N_modes),)
-    plan_fwd = finufft.Plan(2, n_modes_tuple, n_trans=K, eps=eps, isign=+1, dtype='complex128')
-    plan_fwd.setpts(x)
-    plan_adj = finufft.Plan(1, n_modes_tuple, n_trans=K, eps=eps, isign=-1, dtype='complex128')
-    plan_adj.setpts(x)
-    return plan_fwd, plan_adj
-
-
-# ---------------------------------------------------------
-# Block CGLS (Conjugate Gradient for Least Squares)
-# ---------------------------------------------------------
-def _block_cgls(A_op, AH_op, B, M_inv=None, X_init=None, tol=1e-8, maxiter=50, damp=1e-9):
-    """
-    Block Preconditioned Conjugate Gradient for Least Squares (PCGLS).
-    Solves min ||W^{1/2}(AX - B)||_F^2 + damp^2 ||X||_F^2 for a block of vectors.
-    """
-    K_size, N_size = B.shape
-    if X_init is not None:
-        X = X_init.astype(np.complex128, copy=True)
-        R = B - A_op(X)
-    else:
-        X = np.zeros((K_size, N_size), dtype=np.complex128)
-        R = B.astype(np.complex128, copy=True)
-
-    S = AH_op(R).copy()
-
-    if damp > 0:
-        S -= damp**2 * X
-
-    if M_inv is not None:
-        Z = M_inv(S)
-    else:
-        Z = S.copy()
-
-    P = Z.copy()
-    gamma = np.vdot(S, Z).real
-
-    if gamma <= 0.0 or np.isnan(gamma):
-        return X
-
-    # Precompute squared norms for exactly equivalent convergence checks without sqrt
-    norm_b_sq = np.einsum('ij,ij->i', B.real, B.real) + np.einsum('ij,ij->i', B.imag, B.imag)
-    norm_b_denom_sq = (np.sqrt(norm_b_sq) + 1e-14)**2
-    tol2 = tol * tol
-
-    col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
-    if np.max(col_res_sq / norm_b_denom_sq) < tol2:
-        return X
-
-    damp2 = damp * damp
-    use_damp = damp > 0
-    T_P_buf = np.empty_like(B)
-
-    for _ in range(maxiter):
-        Q = A_op(P)
-        AHQ = AH_op(Q)  # A^H * A * P (undamped)
-
-        if use_damp:
-            np.multiply(P, damp2, out=T_P_buf)
-            T_P_buf += AHQ
-            T_P = T_P_buf
-        else:
-            T_P = AHQ
-
-        delta = np.vdot(P, T_P).real
-        if delta <= 0 or np.isnan(delta):
-            break
-
-        alpha = gamma / delta
-
-        X += alpha * P
-        R -= alpha * Q
-        S -= alpha * AHQ  # S tracks A^H R — only use undamped AHQ
-
-        col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
-        if np.max(col_res_sq / norm_b_denom_sq) < tol2:
-            break
-
-        if M_inv is not None:
-            Z_new = M_inv(S)
-        else:
-            Z_new = S.copy()
-
-        gamma_new = np.vdot(S, Z_new).real
-
-        if gamma_new < 1e-28:
-            break
-
-        # Check relative stall (plateau detection)
-        if abs(gamma_new - gamma) / (gamma + 1e-14) < 1e-6:
-            break
-
-        beta = gamma_new / (gamma + 1e-14)
-        P *= beta
-        P += Z_new
-        gamma = gamma_new
-
-    return X
 
 
 # ---------------------------------------------------------
@@ -281,7 +172,6 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
     B_adj = _nufft_adjoint(x_wrapped, f_w, N_modes=N, eps=eps).T  # (K, N)
 
     # 2. Compute Toeplitz kernel from weights (1 FINUFFT Adjoint, double resolution)
-    import multiprocessing
     n_threads = multiprocessing.cpu_count()
 
     v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps)  # (2N,)
@@ -337,38 +227,6 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
 
 
 # ---------------------------------------------------------
-# Invert NUFFT via LSQR — per-radius (azu_unif == 0)
-# ---------------------------------------------------------
-def _invert_nufft_lsqr_perradius(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12):
-    theta_j = np.asarray(theta_j, dtype=float)
-    f       = np.asarray(f, dtype=np.complex128)
-    N, M    = theta_j.shape
-
-    core = np.zeros((N, M), dtype=np.complex128)
-    for ell in range(M):
-        x_wrapped = _wrap_angles(theta_j[:, ell])
-        w = _get_density_weights(theta_j[:, ell])
-        w_sqrt = np.sqrt(w)
-
-        plan_fwd, plan_adj = _make_nufft_plans(x_wrapped, N_modes=N, K=1, eps=eps)
-
-        def _matvec(c, _pfwd=plan_fwd, _wsqrt=w_sqrt):
-            c_buf = np.ascontiguousarray(c[None, :])
-            return _pfwd.execute(c_buf)[0, :] * _wsqrt
-
-        def _rmatvec(d, _padj=plan_adj, _wsqrt=w_sqrt):
-            d_buf = np.ascontiguousarray((d * _wsqrt)[None, :])
-            return _padj.execute(d_buf)[0, :]
-
-        A_op = LinearOperator(shape=(N, N), matvec=_matvec, rmatvec=_rmatvec, dtype=np.complex128)
-        f_w = f[:, ell] * w_sqrt
-
-        core[:, ell] = lsqr(A_op, f_w, damp=REG_PARAM, iter_lim=maxiter, atol=tol, btol=tol)[0]
-
-    return core
-
-
-# ---------------------------------------------------------
 # NUDFT inversion — shared mesh (azu_unif == 1)
 # ---------------------------------------------------------
 def _invert_nudft(theta_j, f):
@@ -388,32 +246,6 @@ def _invert_nudft(theta_j, f):
         f_w = f * w_sqrt[:, None]
 
     return lstsq(A_w, f_w, cond=REG_PARAM)[0]
-
-
-# ---------------------------------------------------------
-# NUDFT inversion — per-radius (azu_unif == 0)
-# ---------------------------------------------------------
-def _invert_nudft_perradius(theta_j, f):
-    theta_j = np.asarray(theta_j, dtype=float)
-    f = np.asarray(f, dtype=np.complex128)
-    N, M = theta_j.shape
-
-    if f.shape != (N, M):
-        raise ValueError(f"f must have shape ({N}, {M}), got {f.shape}")
-
-    k = np.arange(-N // 2, N // 2, dtype=float)
-    # 3D Tensor of Fourier matrices for all M radii: shape (M, N, N)
-    A_all = np.exp(1j * theta_j.T[:, :, None] * k[None, None, :])
-
-    w = _get_density_weights(theta_j)   # shape (N, M)
-    w_sqrt_T = np.sqrt(w).T             # shape (M, N)
-
-    A_w = A_all * w_sqrt_T[:, :, None]  # shape (M, N, N)
-    f_w = f.T * w_sqrt_T                # shape (M, N)
-
-    # Solves all M linear systems simultaneously using batched numpy lstsq
-    X_all = np.linalg.lstsq(A_w, f_w[:, :, None], rcond=REG_PARAM)[0]
-    return X_all.squeeze(-1).T           # shape (N, M)
 
 
 # ---------------------------------------------------------
@@ -440,31 +272,3 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
                                                      tol=tol, maxiter=maxiter, eps=1e-12)
 
     return _pad_coeff_to_Np1(coeff_core, N)
-
-
-# ---------------------------------------------------------
-# Fourier Coefficient Computation — per-radius nonuniform (azu_unif == 0)
-# ---------------------------------------------------------
-def compute_fourier_coeff_nonunif_perradius(f_values: np.ndarray,
-                                            theta_j: np.ndarray,
-                                            maxiter: int = 200,
-                                            tol: float = 1e-8,
-                                            use_nudft: bool = True) -> np.ndarray:
-    """
-    theta_j : (N, M)     — different mesh per radius
-    f_values: (N, M)
-    """
-    f_values = np.asarray(f_values, dtype=np.complex128)
-    theta_j  = np.asarray(theta_j, dtype=float)
-    N, M     = f_values.shape
-
-    if theta_j.shape != (N, M):
-        raise ValueError(f"theta_j must have shape ({N}, {M}), got {theta_j.shape}")
-
-    if use_nudft:
-        core = _invert_nudft_perradius(theta_j, f_values)      # (N, M)
-    else:
-        core = _invert_nufft_lsqr_perradius(theta_j, f_values,
-                                             tol=tol, maxiter=maxiter, eps=1e-12)
-
-    return _pad_coeff_to_Np1(core, N)                          # (N+1, M)

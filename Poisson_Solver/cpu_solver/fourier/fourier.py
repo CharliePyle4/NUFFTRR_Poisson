@@ -9,11 +9,10 @@ import numpy as np
 from .uniform import compute_fourier_coeff_unif
 from .nonuniform import (
     compute_fourier_coeff_nonunif,
-    compute_fourier_coeff_nonunif_perradius,
     _wrap_angles
 )
 
-#-----------------------------------------
+# ---------------------------------------------------------
 # Analysis dispatcher
 # ---------------------------------------------------------
 def compute_angular_fourier_coefficients(f_values: np.ndarray,
@@ -29,7 +28,6 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
     azu_unif:
       2 → uniform FFT
       1 → shared nonuniform mesh, theta_j shape (N,)
-      0 → per-radius nonuniform mesh, theta_j shape (N, M)
     """
     f_values = np.asarray(f_values)
     g_values = np.asarray(g_values)
@@ -65,61 +63,11 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
         )
         return f_fc, g_fc
 
-    elif azu_unif == 0:
-        # Fully nonuniform: theta_j is (N, M), different mesh at each radius.
-        theta = np.asarray(theta_j, dtype=float)
-
-        if f_values.ndim != 2:
-            raise ValueError("For azu_unif == 0, f_values must have shape (N, M)")
-
-        N, M = f_values.shape
-        if theta.shape != (N, M):
-            raise ValueError(
-                f"For azu_unif == 0, theta_j must have shape (N, M) = ({N}, {M}), "
-                f"got {theta.shape}"
-            )
-
-        # f: full grid (N, M) → per-radius NUDFT/NUFFT
-        f_fc = compute_fourier_coeff_nonunif_perradius(
-            f_values,
-            theta,
-            maxiter=maxiter_nufft,
-            tol=tol_nufft,
-            use_nudft=use_nudft_angular,
-        )
-
-        # g: boundary data only on r = R, typically shape (N,)
-        # use the angular mesh at the outer radius (last column of theta)
-        if g_values.ndim == 1:
-            if g_values.shape[0] != N:
-                raise ValueError(
-                    "For azu_unif == 0 with 1D g_values, length must be N"
-                )
-            g_fc = compute_fourier_coeff_nonunif(
-                g_values,
-                theta[:, -1],
-                maxiter=maxiter_nufft,
-                tol=tol_nufft,
-                use_nudft=use_nudft_angular,
-            )
-        else:
-            # If you ever store g on all radii as (N, M), you can also do per-radius here.
-            if g_values.shape != (N, M):
-                raise ValueError(
-                    "g_values must be either (N,) or (N,M) when azu_unif == 0"
-                )
-            g_fc = compute_fourier_coeff_nonunif_perradius(
-                g_values,
-                theta,
-                maxiter=maxiter_nufft,
-                tol=tol_nufft,
-                use_nudft=use_nudft_angular,
-            )
-
-        return f_fc, g_fc
-
     else:
-        raise ValueError('Incorrect index for "azu_unif"')
+        raise ValueError(
+            f'Incorrect index for "azu_unif": {azu_unif}. '
+            'Supported values are 2 (uniform) and 1 (shared nonuniform).'
+        )
 
 
 # ---------------------------------------------------------
@@ -133,7 +81,6 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
     """
     azu_unif == 2: uniform IFFT
     azu_unif == 1: shared nonuniform, NUFFT-2, theta_j (N,)
-    azu_unif == 0: per-radius nonuniform, NUFFT-2 loop, theta_j (N, M)
     """
     u_fourier_coeff = np.asarray(u_fourier_coeff)
     Np1, M = u_fourier_coeff.shape
@@ -160,21 +107,11 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
         out_KM   = finufft.nufft1d2(x, coeff_KN, isign=+1, eps=eps)   # (M, N)
         return out_KM.T                                                # (N, M)
 
-    elif azu_unif == 0:
-        theta = np.asarray(theta_j, dtype=float)
-        if theta.shape != (N, M):
-            raise ValueError("theta_j must have shape (N, M) when azu_unif == 0")
-        base_coeff = u_fourier_coeff[:N, :].copy()
-        u_approx = np.zeros((N, M), dtype=np.complex128)
-        for ell in range(M):
-            x      = np.ascontiguousarray(_wrap_angles(theta[:, ell]))
-            fj_KN  = base_coeff[:, ell][None, :].astype(np.complex128)
-            out_KM = finufft.nufft1d2(x, fj_KN, isign=+1, eps=eps)    # (1, N)
-            u_approx[:, ell] = out_KM[0, :]
-        return u_approx
-
     else:
-        raise ValueError('Incorrect index for "azu_unif"')
+        raise ValueError(
+            f'Incorrect index for "azu_unif": {azu_unif}. '
+            'Supported values are 2 (uniform) and 1 (shared nonuniform).'
+        )
 
 
 def compute_u_fourier_coefficients(v: np.ndarray,
@@ -251,9 +188,3 @@ def compute_u_fourier_coefficients(v: np.ndarray,
         u_fourier_coeff[mask, :] = v[mask, :] + B
 
     return u_fourier_coeff
-
-
-
-
-
-

@@ -15,8 +15,12 @@ def poisson_solver(f_values, g_values, u_fourier_0,
     Solve Δu = f on a disk of radius R in polar coords using Fourier-in-θ
     and radial integration (C, D).
 
+    azu_unif:
+        2 -> Uniform angular grid in θ (standard FFT).
+        1 -> Shared non-uniform angular grid in θ (NUFFT / NUDFT).
+
     use_nudft_angular:
-        Only used when azu_unif == 0 (nonuniform angles).
+        Only used when azu_unif == 1 (nonuniform angles).
         False (default) -> NUFFT + block CG (fast).
         True            -> direct NUDFT solve (dense, reference).
     """
