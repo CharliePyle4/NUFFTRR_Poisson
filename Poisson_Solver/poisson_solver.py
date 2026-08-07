@@ -10,6 +10,7 @@ def poisson_solver(f_values, g_values, u_fourier_0,
                    use_nudft_angular: bool = False,
                    maxiter_nufft: int = 50,
                    tol_nufft: float = 1e-8,
+                   reg_param: float = 1e-12,
                    use_gpu: bool = False):
     """
     Solve Δu = f on a disk of radius R in polar coords using Fourier-in-θ
@@ -46,4 +47,5 @@ def poisson_solver(f_values, g_values, u_fourier_0,
         use_nudft_angular=use_nudft_angular,
         maxiter_nufft=maxiter_nufft,
         tol_nufft=tol_nufft,
+        reg_param=reg_param,
     )

@@ -55,6 +55,30 @@ def g_neumann(x, y):
     return u_x(x, y) * x + u_y(x, y) * y
 
 # ---------------------------------------------------------
+# Global Config
+# ---------------------------------------------------------
+GLOBAL_CONFIG = {
+    'R': 1.0,
+    'rad_unif': 1,
+    'tol_nufft': 1e-10,
+    'maxiter_nufft': 200,
+    'reg_param': 1e-12,
+    'quad_rule': 1,
+    'BC_choice': 1,
+    'problem_type': 0,
+    'custom_problem': None
+}
+
+def set_global_config(**kwargs):
+    global GLOBAL_CONFIG, R, RAD_UNIF
+    GLOBAL_CONFIG.update(kwargs)
+    if 'R' in kwargs: R = kwargs['R']
+    if 'rad_unif' in kwargs: RAD_UNIF = kwargs['rad_unif']
+
+def get_global_config():
+    return GLOBAL_CONFIG
+
+# ---------------------------------------------------------
 # Grid Generation Cache
 # ---------------------------------------------------------
 ANGLE_CACHE = {}
@@ -121,7 +145,8 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
                 rad_unif=RAD_UNIF,
                 azu_unif=solver_azu,
                 use_nudft_angular=nudft_flag,
-                maxiter_nufft=200, tol_nufft=1e-10
+                maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
+                tol_nufft=GLOBAL_CONFIG['tol_nufft']
             )
             runtime = time.perf_counter() - t0
 
@@ -641,7 +666,8 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False):
                 rad_unif=rad_unif,
                 azu_unif=solver_azu,
                 use_nudft_angular=nudft_flag,
-                maxiter_nufft=50, tol_nufft=1e-8
+                maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
+                tol_nufft=GLOBAL_CONFIG['tol_nufft']
             )
             runtime = time.perf_counter() - t0
             _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)

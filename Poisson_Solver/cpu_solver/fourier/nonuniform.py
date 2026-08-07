@@ -91,69 +91,65 @@ def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
     """
     X = np.zeros_like(B)
     R = B.copy()
-    
+
     if M_inv is not None:
         Z = M_inv(R)
     else:
         Z = R.copy()
-        
+
     P = Z.copy()
     gamma = np.vdot(R, Z).real
-    
+
     if gamma <= 0.0 or np.isnan(gamma):
         return X
-        
+
     norm_b_sq = np.einsum('ij,ij->i', B.real, B.real) + np.einsum('ij,ij->i', B.imag, B.imag)
     norm_b_denom_sq = (np.sqrt(norm_b_sq) + 1e-14)**2
     tol2 = tol * tol
-    
+
     col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
     if np.max(col_res_sq / norm_b_denom_sq) < tol2:
         return X
-        
+
     for _ in range(maxiter):
         TP = T_op(P)
         delta = np.vdot(P, TP).real
         if delta <= 0 or np.isnan(delta):
             break
-            
+
         alpha = gamma / delta
-        
+
         X += alpha * P
         R -= alpha * TP
-        
+
         col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
         if np.max(col_res_sq / norm_b_denom_sq) < tol2:
             break
-            
+
         if M_inv is not None:
             Z_new = M_inv(R)
         else:
             Z_new = R.copy()
-            
+
         gamma_new = np.vdot(R, Z_new).real
         if gamma_new < 1e-28:
             break
-            
+
         if abs(gamma_new - gamma) / (gamma + 1e-14) < 1e-6:
             break
-            
+
         beta = gamma_new / (gamma + 1e-14)
         P *= beta
         P += Z_new
         gamma = gamma_new
-        
+
     return X
 
 
 # ---------------------------------------------------------
 # Invert NUFFT via Block CG & Toeplitz Embedding — shared mesh (azu_unif == 1)
-# Solves the normal equations using fast convolutions instead of FINUFFT calls.
 # ---------------------------------------------------------
-REG_PARAM = 1e-12  # Tikhonov regularization parameter / condition threshold
-
-
-def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
+def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, reg_param=1e-12):
     theta_j = np.asarray(theta_j, dtype=float)
     f_orig = np.asarray(f, dtype=np.complex128)
     N = theta_j.size
@@ -195,8 +191,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
         fft_T.execute()
         T_ifft_in[:] = T_hat * V_hat
         ifft_T.execute()
-        # return the first N components of each row, scaling by 1/(2N) for the unnormalized IFFT
-        return (T_out[:, :N].copy() / (2.0 * N)) + (REG_PARAM**2) * X
+        return (T_out[:, :N].copy() / (2.0 * N)) + (reg_param**2) * X
 
     # 4. Circulant Preconditioner via Point Spread Function (PSF)
     c_psf = v_raw[N // 2 : N // 2 + N]
@@ -217,7 +212,6 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
         fft_M.execute()
         M_ifft_in[:] = M_hat * eig_c_inv
         ifft_M.execute()
-        # scale by 1/N for the unnormalized IFFT
         return np.fft.fftshift(M_out / N, axes=1).copy()
 
     # 5. Solve using Block CG (Normal Equations)
@@ -229,7 +223,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9):
 # ---------------------------------------------------------
 # NUDFT inversion — shared mesh (azu_unif == 1)
 # ---------------------------------------------------------
-def _invert_nudft(theta_j, f):
+def _invert_nudft(theta_j, f, reg_param=1e-12):
     theta = np.asarray(theta_j, float)
     f = np.asarray(f, dtype=np.complex128)
     N = theta.size
@@ -245,7 +239,7 @@ def _invert_nudft(theta_j, f):
     else:
         f_w = f * w_sqrt[:, None]
 
-    return lstsq(A_w, f_w, cond=REG_PARAM)[0]
+    return lstsq(A_w, f_w, cond=reg_param)[0]
 
 
 # ---------------------------------------------------------
@@ -255,7 +249,8 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
                                   theta_j: np.ndarray,
                                   maxiter: int = 50,
                                   tol: float = 1e-8,
-                                  use_nudft: bool = False) -> np.ndarray:
+                                  use_nudft: bool = False,
+                                  reg_param: float = 1e-12) -> np.ndarray:
     """
     theta_j : (N,)       — same mesh for all radii
     f_values: (N,) or (N, M)
@@ -266,9 +261,10 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
         raise ValueError("theta_j and f_values must have the same first dimension")
 
     if use_nudft:
-        coeff_core = _invert_nudft(theta_j, f_values)
+        coeff_core = _invert_nudft(theta_j, f_values, reg_param=reg_param)
     else:
         coeff_core = _invert_nufft_block_cgls_shared(theta_j, f_values,
-                                                     tol=tol, maxiter=maxiter, eps=1e-12)
+                                                     tol=tol, maxiter=maxiter, eps=1e-12,
+                                                     reg_param=reg_param)
 
     return _pad_coeff_to_Np1(coeff_core, N)

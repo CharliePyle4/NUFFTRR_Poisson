@@ -21,7 +21,8 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
                                          azu_unif: int,
                                          use_nudft_angular: bool = True,
                                          maxiter_nufft: int = 50,
-                                         tol_nufft: float = 1e-8):
+                                         tol_nufft: float = 1e-8,
+                                         reg_param: float = 1e-12):
     """
     Compute angular Fourier coefficients (analysis step) for f and g.
 
@@ -53,6 +54,7 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
             maxiter=maxiter_nufft,
             tol=tol_nufft,
             use_nudft=use_nudft_angular,
+            reg_param=reg_param,
         )
         g_fc = compute_fourier_coeff_nonunif(
             g_values,
@@ -60,6 +62,7 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
             maxiter=maxiter_nufft,
             tol=tol_nufft,
             use_nudft=use_nudft_angular,
+            reg_param=reg_param,
         )
         return f_fc, g_fc
 
