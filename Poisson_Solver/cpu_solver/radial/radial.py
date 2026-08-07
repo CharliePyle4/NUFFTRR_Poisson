@@ -27,10 +27,13 @@ def _vectorized_1step_recurrence(a: np.ndarray, Y0: np.ndarray, C: np.ndarray) -
     """Helper to solve 1-step linear recurrence y_k = a_k y_{k-1} + C_k in vectorized 2D NumPy."""
     if a.shape[1] == 0:
         return Y0
-    P = np.cumprod(a, axis=1)
-    T = np.where(P != 0, C / P, 0.0)
-    S = np.cumsum(T, axis=1)
-    res = np.nan_to_num(P * (Y0 + S))
+    
+    with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+        P = np.cumprod(a, axis=1)
+        T = np.where(P != 0, C / P, 0.0)
+        S = np.cumsum(T, axis=1)
+        res = np.nan_to_num(P * (Y0 + S))
+        
     return np.hstack([Y0, res])
 
 
@@ -55,14 +58,17 @@ def _compute_v_neg_pos_numpy(C: np.ndarray,
             v_neg[:, 1] = C[:, 0]
         if M > 2:
             r_ratio_neg = (r_m[2:M] / r_m[1:M-1])[None, :] ** exp_neg
-            for i in range(2, M):
-                v_neg[:, i] = r_ratio_neg[:, i - 2] * v_neg[:, i - 1] + C[:, i - 1]
+            v_neg[:, 1:] = _vectorized_1step_recurrence(r_ratio_neg, C[:, 0:1], C[:, 1:M-1])
 
         if M > 1:
             v_pos[:, M - 2] = D[:, M - 2]
+        if M > 2:
             r_ratio_pos = (r_m[0:M-1] / r_m[1:M])[None, :] ** exp_pos
-            for i in range(M - 3, -1, -1):
-                v_pos[:, i] = r_ratio_pos[:, i] * v_pos[:, i + 1] + D[:, i]
+            a_rev = r_ratio_pos[:, :M-2][:, ::-1]
+            C_rev = D[:, :M-2][:, ::-1]
+            Y0 = D[:, M-2:M-1]
+            res_rev = _vectorized_1step_recurrence(a_rev, Y0, C_rev)
+            v_pos[:, :M-1] = res_rev[:, ::-1]
 
     elif quad_rule == 2:
         # Simpson: 2‑step recurrences (mode-vectorized)
