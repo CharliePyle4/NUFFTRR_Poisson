@@ -1,0 +1,242 @@
+--- Cell 5 Text: Running Problem 0 - Table 1 (Jittered)...
+--- Cell 5 Text: Pipeline (P1_Table1): 100%|██████████| 3/3 [00:15<00:00,  5.11s/it, method=Fixed-jittered-NUFFT]
+--- Cell 5 Text: Running Problem 0 - Table 2 (Jittered)...
+--- Cell 5 Text: Pipeline (P1_Table2): 100%|██████████| 3/3 [00:02<00:00,  1.24it/s, method=Fixed-jittered-NUFFT]
+--- Cell 5 Text: Running Problem 1 - Table 1 (Rand)...
+--- Cell 5 Text: Pipeline (P1_Table1): 100%|██████████| 3/3 [00:34<00:00, 11.44s/it, method=Fixed-rand-NUFFT]
+--- Cell 5 Text: Running Problem 1 - Table 2 (Rand)...
+--- Cell 5 Text: Pipeline (P1_Table2): 100%|██████████| 3/3 [00:05<00:00,  1.77s/it, method=Fixed-rand-NUFFT]
+--- Cell 5 Text: Running Problem 2 - Table 1 (Stratified Rand)...
+--- Cell 5 Text: Pipeline (P1_Table1): 100%|██████████| 3/3 [00:39<00:00, 13.01s/it, method=Fixed-stratified_rand-NUFFT]
+--- Cell 5 Text: Running Problem 2 - Table 2 (Stratified Rand)...
+--- Cell 5 Text: Pipeline (P1_Table2): 100%|██████████| 3/3 [00:04<00:00,  1.39s/it, method=Fixed-stratified_rand-NUFFT]
+--- Cell 5 Text: Running Accuracy Comparisons...
+--- Cell 5 Text: Pipeline (Accuracy_VaryN): 100%|██████████| 13/13 [00:22<00:00,  1.76s/it, method=Fixed-sine-NUFFT]          
+--- Cell 5 Text: Pipeline (Accuracy_VaryM): 100%|██████████| 13/13 [00:07<00:00,  1.73it/s, method=Fixed-sine-NUFFT]          
+--- Cell 7 Text: Problem 0 - Table 1 - errors should be the same for rows, and decrease along columns. uniform, nudft, and nufft should be same
+--- Cell 7 Text: ================================================================================
+--- Cell 7 Text: Problem 0 - Table 1 Accuracy
+--- Cell 7 Text: ================================================================================
+=== Cell 7 Table ===
+  label      Uniform / FFT                                                                             Fixed jittered / NUDFT                                                                              Fixed jittered / NUFFT                                                                                
+      M                 32                 64                128                256                512                     32                 64                128                256                 512                     32                  64                 128                 256                 512
+      N Unnamed: 1_level_2 Unnamed: 2_level_2 Unnamed: 3_level_2 Unnamed: 4_level_2 Unnamed: 5_level_2     Unnamed: 6_level_2 Unnamed: 7_level_2 Unnamed: 8_level_2 Unnamed: 9_level_2 Unnamed: 10_level_2    Unnamed: 11_level_2 Unnamed: 12_level_2 Unnamed: 13_level_2 Unnamed: 14_level_2 Unnamed: 15_level_2
+0    32           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08               0.000011           0.000003       6.550000e-07       1.620000e-07        4.050000e-08               0.000011            0.000003        6.550000e-07        1.620000e-07        4.050000e-08
+1    64           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08               0.000011           0.000003       6.550000e-07       1.620000e-07        4.040000e-08               0.000011            0.000003        6.550000e-07        1.620000e-07        4.040000e-08
+2   128           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08               0.000011           0.000003       6.550000e-07       1.620000e-07        4.040000e-08               0.000011            0.000003        6.550000e-07        1.620000e-07        4.040000e-08
+3   256           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08               0.000011           0.000003       6.550000e-07       1.620000e-07        4.040000e-08               0.000011            0.000003        6.550000e-07        1.620000e-07        4.050000e-08
+4   512           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08               0.000011           0.000003       6.550000e-07       1.620000e-07        4.040000e-08               0.000011            0.000003        6.550000e-07        1.620000e-07        4.040000e-08
+
+--- Cell 7 Text: Problem 0 - Table 2 - errors should decrease along rows
+--- Cell 7 Text: ================================================================================
+--- Cell 7 Text: Problem 0 - Table 2 (N=32) Accuracy
+--- Cell 7 Text: ================================================================================
+=== Cell 7 Table ===
+     label      Uniform / FFT                                                          Fixed jittered / NUDFT                                                          Fixed jittered / NUFFT                                                            
+  quad_str            Simpson                           Trapezoidal                                   Simpson                           Trapezoidal                                   Simpson                             Trapezoidal                    
+    bc_str          Dirichlet            Neumann          Dirichlet            Neumann              Dirichlet            Neumann          Dirichlet            Neumann              Dirichlet             Neumann           Dirichlet             Neumann
+         M Unnamed: 1_level_3 Unnamed: 2_level_3 Unnamed: 3_level_3 Unnamed: 4_level_3     Unnamed: 5_level_3 Unnamed: 6_level_3 Unnamed: 7_level_3 Unnamed: 8_level_3     Unnamed: 9_level_3 Unnamed: 10_level_3 Unnamed: 11_level_3 Unnamed: 12_level_3
+0       32       3.140000e-06       3.180000e-06       1.100000e-05       1.880000e-04           3.140000e-06       3.180000e-06       1.100000e-05       1.880000e-04           3.140000e-06        3.180000e-06        1.100000e-05        1.880000e-04
+1       64       4.020000e-07       4.050000e-07       2.660000e-06       4.550000e-05           4.020000e-07       4.050000e-07       2.660000e-06       4.550000e-05           4.020000e-07        4.050000e-07        2.660000e-06        4.550000e-05
+2      128       5.080000e-08       5.100000e-08       6.550000e-07       1.120000e-05           5.080000e-08       5.100000e-08       6.550000e-07       1.120000e-05           5.080000e-08        5.100000e-08        6.550000e-07        1.120000e-05
+3      256       6.390000e-09       6.400000e-09       1.620000e-07       2.780000e-06           6.390000e-09       6.400000e-09       1.620000e-07       2.780000e-06           6.390000e-09        6.400000e-09        1.620000e-07        2.780000e-06
+4      512       8.000000e-10       8.010000e-10       4.040000e-08       6.910000e-07           8.010000e-10       8.010000e-10       4.050000e-08       6.920000e-07           8.000000e-10        8.010000e-10        4.050000e-08        6.920000e-07
+
+--- Cell 7 Text: Problem 1 - Table 1 - errors should be the same for rows, and decrease along columns. uniform, nudft, and nufft should be same
+--- Cell 7 Text: ================================================================================
+--- Cell 7 Text: Problem 1 - Table 1 Accuracy
+--- Cell 7 Text: ================================================================================
+=== Cell 7 Table ===
+  label      Uniform / FFT                                                                             Fixed rand / NUDFT                                                                               Fixed rand / NUFFT                                                                                
+      M                 32                 64                128                256                512                 32                 64                128                256                 512                  32                  64                 128                 256                 512
+      N Unnamed: 1_level_2 Unnamed: 2_level_2 Unnamed: 3_level_2 Unnamed: 4_level_2 Unnamed: 5_level_2 Unnamed: 6_level_2 Unnamed: 7_level_2 Unnamed: 8_level_2 Unnamed: 9_level_2 Unnamed: 10_level_2 Unnamed: 11_level_2 Unnamed: 12_level_2 Unnamed: 13_level_2 Unnamed: 14_level_2 Unnamed: 15_level_2
+0    32           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08           0.000011           0.000003       6.560000e-07       1.620000e-07        3.950000e-08              0.1290              0.1290              0.1290              0.1290              0.1290
+1    64           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08           0.000011           0.000003       1.720000e-06       1.610000e-06        1.600000e-06              0.0848              0.0851              0.0852              0.0853              0.0853
+2   128           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08           0.001390           0.001400       1.400000e-03       1.400000e-03        1.400000e-03              0.2140              0.2140              0.2150              0.2150              0.2150
+3   256           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08           0.043500           0.043900       4.390000e-02       4.390000e-02        4.390000e-02              0.1670              0.1680              0.1680              0.1680              0.1680
+4   512           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08           0.079200           0.080000       8.020000e-02       8.020000e-02        8.020000e-02              0.2330              0.2350              0.2350              0.2350              0.2350
+
+--- Cell 7 Text: error along rows indicate nudft or nufft is not currently accurate enough. Inaccuracy is worse than Problem 0, likely due to random mesh being more challenging than jittered.
+--- Cell 7 Text: Problem 1 - Table 2 - errors should decrease along rows
+--- Cell 7 Text: ================================================================================
+--- Cell 7 Text: Problem 1 - Table 2 (N=32) Accuracy
+--- Cell 7 Text: ================================================================================
+=== Cell 7 Table ===
+     label      Uniform / FFT                                                          Fixed rand / NUDFT                                                          Fixed rand / NUFFT                                                            
+  quad_str            Simpson                           Trapezoidal                               Simpson                           Trapezoidal                               Simpson                             Trapezoidal                    
+    bc_str          Dirichlet            Neumann          Dirichlet            Neumann          Dirichlet            Neumann          Dirichlet            Neumann          Dirichlet             Neumann           Dirichlet             Neumann
+         M Unnamed: 1_level_3 Unnamed: 2_level_3 Unnamed: 3_level_3 Unnamed: 4_level_3 Unnamed: 5_level_3 Unnamed: 6_level_3 Unnamed: 7_level_3 Unnamed: 8_level_3 Unnamed: 9_level_3 Unnamed: 10_level_3 Unnamed: 11_level_3 Unnamed: 12_level_3
+0       32       3.140000e-06       3.180000e-06       1.100000e-05       1.880000e-04       3.140000e-06       3.180000e-06       1.100000e-05       1.870000e-04              0.129              0.0302               0.129              0.0303
+1       64       4.020000e-07       4.050000e-07       2.660000e-06       4.550000e-05       4.010000e-07       4.030000e-07       2.670000e-06       4.510000e-05              0.129              0.0302               0.129              0.0302
+2      128       5.080000e-08       5.100000e-08       6.550000e-07       1.120000e-05       4.970000e-08       4.950000e-08       6.560000e-07       1.110000e-05              0.129              0.0302               0.129              0.0302
+3      256       6.390000e-09       6.400000e-09       1.620000e-07       2.780000e-06       6.370000e-09       5.860000e-09       1.620000e-07       2.760000e-06              0.129              0.0302               0.129              0.0302
+4      512       8.000000e-10       8.010000e-10       4.040000e-08       6.910000e-07       3.830000e-09       3.450000e-09       3.950000e-08       6.860000e-07              0.129              0.0302               0.129              0.0302
+
+--- Cell 7 Text: Problem 2 - Table 1 - errors should be the same for rows, and decrease along columns. uniform, nudft, and nufft should be same
+--- Cell 7 Text: ================================================================================
+--- Cell 7 Text: Problem 2 - Table 1 Accuracy
+--- Cell 7 Text: ================================================================================
+=== Cell 7 Table ===
+  label      Uniform / FFT                                                                             Fixed stratified / NUDFT                                                                              Fixed stratified / NUFFT                                                                                
+      M                 32                 64                128                256                512                       32                 64                128                256                 512                       32                  64                 128                 256                 512
+      N Unnamed: 1_level_2 Unnamed: 2_level_2 Unnamed: 3_level_2 Unnamed: 4_level_2 Unnamed: 5_level_2       Unnamed: 6_level_2 Unnamed: 7_level_2 Unnamed: 8_level_2 Unnamed: 9_level_2 Unnamed: 10_level_2      Unnamed: 11_level_2 Unnamed: 12_level_2 Unnamed: 13_level_2 Unnamed: 14_level_2 Unnamed: 15_level_2
+0    32           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08                 0.000011           0.000003       6.560000e-07       1.630000e-07        4.050000e-08                 0.000011            0.000003        6.560000e-07        1.630000e-07        4.050000e-08
+1    64           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08                 0.000011           0.000003       6.550000e-07       1.620000e-07        4.040000e-08                 0.000011            0.000003        6.550000e-07        1.620000e-07        4.040000e-08
+2   128           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08                 0.000011           0.000003       6.550000e-07       1.620000e-07        4.040000e-08                 0.000011            0.000003        6.550000e-07        1.620000e-07        4.040000e-08
+3   256           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08                 0.000011           0.000003       6.550000e-07       1.620000e-07        4.040000e-08                 0.000011            0.000003        6.550000e-07        1.620000e-07        4.030000e-08
+4   512           0.000011           0.000003       6.550000e-07       1.620000e-07       4.040000e-08                 0.000011           0.000003       6.550000e-07       1.620000e-07        4.040000e-08                 0.000011            0.000003        6.570000e-07        1.650000e-07        4.420000e-08
+
+--- Cell 7 Text: Problem 2 - Table 2 - errors should decrease along rows
+--- Cell 7 Text: ================================================================================
+--- Cell 7 Text: Problem 2 - Table 2 (N=32) Accuracy
+--- Cell 7 Text: ================================================================================
+=== Cell 7 Table ===
+     label      Uniform / FFT                                                          Fixed stratified / NUDFT                                                          Fixed stratified / NUFFT                                                            
+  quad_str            Simpson                           Trapezoidal                                     Simpson                           Trapezoidal                                     Simpson                             Trapezoidal                    
+    bc_str          Dirichlet            Neumann          Dirichlet            Neumann                Dirichlet            Neumann          Dirichlet            Neumann                Dirichlet             Neumann           Dirichlet             Neumann
+         M Unnamed: 1_level_3 Unnamed: 2_level_3 Unnamed: 3_level_3 Unnamed: 4_level_3       Unnamed: 5_level_3 Unnamed: 6_level_3 Unnamed: 7_level_3 Unnamed: 8_level_3       Unnamed: 9_level_3 Unnamed: 10_level_3 Unnamed: 11_level_3 Unnamed: 12_level_3
+0       32       3.140000e-06       3.180000e-06       1.100000e-05       1.880000e-04             3.140000e-06       3.180000e-06       1.100000e-05       1.880000e-04             3.140000e-06        3.180000e-06        1.100000e-05        1.880000e-04
+1       64       4.020000e-07       4.050000e-07       2.660000e-06       4.550000e-05             4.020000e-07       4.050000e-07       2.660000e-06       4.550000e-05             4.020000e-07        4.050000e-07        2.660000e-06        4.550000e-05
+2      128       5.080000e-08       5.100000e-08       6.550000e-07       1.120000e-05             5.090000e-08       5.100000e-08       6.560000e-07       1.120000e-05             5.090000e-08        5.100000e-08        6.560000e-07        1.120000e-05
+3      256       6.390000e-09       6.400000e-09       1.620000e-07       2.780000e-06             6.390000e-09       6.400000e-09       1.630000e-07       2.780000e-06             6.390000e-09        6.390000e-09        1.630000e-07        2.780000e-06
+4      512       8.000000e-10       8.010000e-10       4.040000e-08       6.910000e-07             8.010000e-10       7.990000e-10       4.050000e-08       6.910000e-07             8.030000e-10        7.970000e-10        4.050000e-08        6.910000e-07
+
+--- Cell 7 Text: Problem 2 - Table 1 -All errors should be same along rows, and relatively same along columns
+--- Cell 7 Text: ================================================================================
+--- Cell 7 Text: Accuracy Comparison (Fixed M=32) Accuracy
+--- Cell 7 Text: ================================================================================
+=== Cell 7 Table ===
+  label      Uniform / FFT    Uniform / NUDFT    Uniform / NUFFT Fixed clustered / NUDFT Fixed jittered / NUDFT Fixed rand / NUDFT Fixed sine / NUDFT Fixed stratified_rand / NUDFT Fixed clustered / NUFFT Fixed jittered / NUFFT  Fixed rand / NUFFT  Fixed sine / NUFFT Fixed stratified_rand / NUFFT
+      N Unnamed: 1_level_1 Unnamed: 2_level_1 Unnamed: 3_level_1      Unnamed: 4_level_1     Unnamed: 5_level_1 Unnamed: 6_level_1 Unnamed: 7_level_1            Unnamed: 8_level_1      Unnamed: 9_level_1    Unnamed: 10_level_1 Unnamed: 11_level_1 Unnamed: 12_level_1           Unnamed: 13_level_1
+0    32           0.000011           0.000011           0.000011                0.000011               0.000011           0.000011           0.000011                      0.000011                0.005180               0.000011              0.1290            0.000847                      0.000011
+1    64           0.000011           0.000011           0.000011                0.000011               0.000011           0.000011           0.000013                      0.000011                0.001890               0.000011              0.0848            0.000493                      0.000011
+2   128           0.000011           0.000011           0.000011                0.000012               0.000011           0.001390           0.000012                      0.000011                0.000980               0.000011              0.2140            0.000092                      0.000011
+3   256           0.000011           0.000011           0.000011                0.000011               0.000011           0.043500           0.000011                      0.000011                0.000470               0.000011              0.1670            0.000011                      0.000011
+4   512           0.000011           0.000011           0.000011                0.000011               0.000011           0.079200           0.000011                      0.000011                0.000233               0.000011              0.2330            0.000011                      0.000011
+
+--- Cell 7 Text: Problem 2 - Table 2 -All errors should decrease along rows, and relatively same along columns
+--- Cell 7 Text: ================================================================================
+--- Cell 7 Text: Accuracy Comparison (Fixed N=32) Accuracy
+--- Cell 7 Text: ================================================================================
+=== Cell 7 Table ===
+  label      Uniform / FFT    Uniform / NUDFT    Uniform / NUFFT Fixed clustered / NUDFT Fixed jittered / NUDFT Fixed rand / NUDFT Fixed sine / NUDFT Fixed stratified_rand / NUDFT Fixed clustered / NUFFT Fixed jittered / NUFFT  Fixed rand / NUFFT  Fixed sine / NUFFT Fixed stratified_rand / NUFFT
+      M Unnamed: 1_level_1 Unnamed: 2_level_1 Unnamed: 3_level_1      Unnamed: 4_level_1     Unnamed: 5_level_1 Unnamed: 6_level_1 Unnamed: 7_level_1            Unnamed: 8_level_1      Unnamed: 9_level_1    Unnamed: 10_level_1 Unnamed: 11_level_1 Unnamed: 12_level_1           Unnamed: 13_level_1
+0    32       1.100000e-05       1.100000e-05       1.100000e-05            1.100000e-05           1.100000e-05       1.100000e-05       1.100000e-05                  1.100000e-05                 0.00518           1.100000e-05               0.129            0.000847                  1.100000e-05
+1    64       2.660000e-06       2.660000e-06       2.660000e-06            2.740000e-06           2.660000e-06       2.670000e-06       2.660000e-06                  2.660000e-06                 0.00517           2.660000e-06               0.129            0.000841                  2.660000e-06
+2   128       6.550000e-07       6.550000e-07       6.550000e-07            9.150000e-07           6.550000e-07       6.560000e-07       6.550000e-07                  6.560000e-07                 0.00517           6.550000e-07               0.129            0.000842                  6.560000e-07
+3   256       1.620000e-07       1.620000e-07       1.620000e-07            6.590000e-07           1.620000e-07       1.620000e-07       1.620000e-07                  1.630000e-07                 0.00517           1.620000e-07               0.129            0.000844                  1.630000e-07
+4   512       4.040000e-08       4.040000e-08       4.040000e-08            6.400000e-07           4.050000e-08       3.950000e-08       4.050000e-08                  4.050000e-08                 0.00516           4.050000e-08               0.129            0.000845                  4.050000e-08
+
+--- Cell 9 Text: Problem 0 - Table 1 Runtimes
+--- Cell 9 Text: ================================================================================
+--- Cell 9 Text: Problem 0 - Table 1 Runtime (s)
+--- Cell 9 Text: ================================================================================
+=== Cell 9 Table ===
+  label      Uniform / FFT                                                                             Fixed jittered / NUDFT                                                                              Fixed jittered / NUFFT                                                                                
+      M                 32                 64                128                256                512                     32                 64                128                256                 512                     32                  64                 128                 256                 512
+      N Unnamed: 1_level_2 Unnamed: 2_level_2 Unnamed: 3_level_2 Unnamed: 4_level_2 Unnamed: 5_level_2     Unnamed: 6_level_2 Unnamed: 7_level_2 Unnamed: 8_level_2 Unnamed: 9_level_2 Unnamed: 10_level_2    Unnamed: 11_level_2 Unnamed: 12_level_2 Unnamed: 13_level_2 Unnamed: 14_level_2 Unnamed: 15_level_2
+0    32             0.0039             0.0036             0.0026             0.0046             0.0050                 0.0039             0.0043             0.0108             0.0130              0.0225                 0.0325              0.0356              0.0378              0.0452              0.0733
+1    64             0.0014             0.0022             0.0022             0.0039             0.0095                 0.0065             0.0102             0.0145             0.0186              0.0342                 0.0552              0.0591              0.0411              0.1372              0.1467
+2   128             0.0020             0.0061             0.0036             0.0113             0.0202                 0.0603             0.0631             0.0884             0.0927              0.1542                 0.0678              0.0720              0.0942              0.1614              0.3783
+3   256             0.0034             0.0058             0.0096             0.0231             0.0427                 0.1937             0.2197             0.2559             0.3391              0.5509                 0.0784              0.1095              0.1692              0.3771              0.6337
+4   512             0.0054             0.0068             0.0187             0.0499             0.0823                 0.7559             0.7898             0.8963             1.1760              1.7508                 0.1324              0.1876              0.4183              0.8021              1.2881
+
+--- Cell 9 Text: Problem 0 - Table 2 Runtimes
+--- Cell 9 Text: ================================================================================
+--- Cell 9 Text: Problem 0 - Table 2 (N=32) Runtime (s)
+--- Cell 9 Text: ================================================================================
+=== Cell 9 Table ===
+     label      Uniform / FFT                                                          Fixed jittered / NUDFT                                                          Fixed jittered / NUFFT                                                            
+  quad_str            Simpson                           Trapezoidal                                   Simpson                           Trapezoidal                                   Simpson                             Trapezoidal                    
+    bc_str          Dirichlet            Neumann          Dirichlet            Neumann              Dirichlet            Neumann          Dirichlet            Neumann              Dirichlet             Neumann           Dirichlet             Neumann
+         M Unnamed: 1_level_3 Unnamed: 2_level_3 Unnamed: 3_level_3 Unnamed: 4_level_3     Unnamed: 5_level_3 Unnamed: 6_level_3 Unnamed: 7_level_3 Unnamed: 8_level_3     Unnamed: 9_level_3 Unnamed: 10_level_3 Unnamed: 11_level_3 Unnamed: 12_level_3
+0       32             0.0030             0.0024             0.0031             0.0042                 0.0038             0.0047             0.0037             0.0041                 0.0317              0.0368              0.0384              0.0358
+1       64             0.0026             0.0017             0.0032             0.0018                 0.0051             0.0052             0.0041             0.0045                 0.0374              0.0368              0.0334              0.0386
+2      128             0.0018             0.0030             0.0016             0.0015                 0.0064             0.0078             0.0064             0.0068                 0.0291              0.0343              0.0272              0.0338
+3      256             0.0023             0.0030             0.0027             0.0025                 0.0156             0.0136             0.0135             0.0110                 0.0366              0.0481              0.0399              0.0410
+4      512             0.0039             0.0037             0.0040             0.0036                 0.0302             0.0296             0.0238             0.0243                 0.0717              0.0705              0.0732              0.0724
+
+--- Cell 9 Text: Problem 1 - Table 1 Runtimes
+--- Cell 9 Text: ================================================================================
+--- Cell 9 Text: Problem 1 - Table 1 Runtime (s)
+--- Cell 9 Text: ================================================================================
+=== Cell 9 Table ===
+  label      Uniform / FFT                                                                             Fixed rand / NUDFT                                                                               Fixed rand / NUFFT                                                                                
+      M                 32                 64                128                256                512                 32                 64                128                256                 512                  32                  64                 128                 256                 512
+      N Unnamed: 1_level_2 Unnamed: 2_level_2 Unnamed: 3_level_2 Unnamed: 4_level_2 Unnamed: 5_level_2 Unnamed: 6_level_2 Unnamed: 7_level_2 Unnamed: 8_level_2 Unnamed: 9_level_2 Unnamed: 10_level_2 Unnamed: 11_level_2 Unnamed: 12_level_2 Unnamed: 13_level_2 Unnamed: 14_level_2 Unnamed: 15_level_2
+0    32             0.0038             0.0048             0.0084             0.0032             0.0038             0.0056             0.0044             0.0086             0.0147              0.0255              0.2116              0.2431              0.1096              0.1507              0.3360
+1    64             0.0015             0.0023             0.0021             0.0035             0.0067             0.0066             0.0068             0.0115             0.0199              0.0448              0.2182              0.2337              0.1638              0.3347              0.6196
+2   128             0.0031             0.0030             0.0052             0.0070             0.0199             0.0532             0.0623             0.0783             0.0963              0.1467              0.2763              0.3161              0.3610              0.8253              1.8160
+3   256             0.0034             0.0040             0.0084             0.0171             0.0404             0.2111             0.2110             0.2376             0.3099              0.5134              0.2852              0.4087              0.6065              1.7919              3.2336
+4   512             0.0084             0.0075             0.0201             0.0403             0.0936             0.7775             0.7948             0.9265             1.2021              1.6595              0.4066              0.6885              1.8020              3.2546              6.0039
+
+--- Cell 9 Text: Problem 1 - Table 2 Runtimes
+--- Cell 9 Text: ================================================================================
+--- Cell 9 Text: Problem 1 - Table 2 (N=32) Runtime (s)
+--- Cell 9 Text: ================================================================================
+=== Cell 9 Table ===
+     label      Uniform / FFT                                                          Fixed rand / NUDFT                                                          Fixed rand / NUFFT                                                            
+  quad_str            Simpson                           Trapezoidal                               Simpson                           Trapezoidal                               Simpson                             Trapezoidal                    
+    bc_str          Dirichlet            Neumann          Dirichlet            Neumann          Dirichlet            Neumann          Dirichlet            Neumann          Dirichlet             Neumann           Dirichlet             Neumann
+         M Unnamed: 1_level_3 Unnamed: 2_level_3 Unnamed: 3_level_3 Unnamed: 4_level_3 Unnamed: 5_level_3 Unnamed: 6_level_3 Unnamed: 7_level_3 Unnamed: 8_level_3 Unnamed: 9_level_3 Unnamed: 10_level_3 Unnamed: 11_level_3 Unnamed: 12_level_3
+0       32             0.0026             0.0029             0.0027             0.0023             0.0047             0.0029             0.0037             0.0035             0.1860              0.2031              0.1789              0.1823
+1       64             0.0018             0.0019             0.0028             0.0025             0.0046             0.0042             0.0040             0.0055             0.2247              0.1995              0.1902              0.2158
+2      128             0.0024             0.0024             0.0021             0.0015             0.0060             0.0059             0.0075             0.0060             0.1099              0.1137              0.1132              0.1133
+3      256             0.0033             0.0030             0.0027             0.0026             0.0154             0.0145             0.0134             0.0133             0.1440              0.1452              0.1502              0.1520
+4      512             0.0035             0.0053             0.0043             0.0032             0.0287             0.0256             0.0244             0.0219             0.2913              0.3082              0.3037              0.3049
+
+--- Cell 9 Text: Problem 2 - Table 1 Runtimes (Stratified Rand)
+--- Cell 9 Text: ================================================================================
+--- Cell 9 Text: Problem 2 - Table 1 Runtime (s)
+--- Cell 9 Text: ================================================================================
+=== Cell 9 Table ===
+  label      Uniform / FFT                                                                             Fixed stratified / NUDFT                                                                              Fixed stratified / NUFFT                                                                                
+      M                 32                 64                128                256                512                       32                 64                128                256                 512                       32                  64                 128                 256                 512
+      N Unnamed: 1_level_2 Unnamed: 2_level_2 Unnamed: 3_level_2 Unnamed: 4_level_2 Unnamed: 5_level_2       Unnamed: 6_level_2 Unnamed: 7_level_2 Unnamed: 8_level_2 Unnamed: 9_level_2 Unnamed: 10_level_2      Unnamed: 11_level_2 Unnamed: 12_level_2 Unnamed: 13_level_2 Unnamed: 14_level_2 Unnamed: 15_level_2
+0    32             0.0017             0.0018             0.0029             0.0022             0.0037                   0.0049             0.0044             0.0061             0.0130              0.0279                   0.0590              0.0727              0.0549              0.1107              0.1233
+1    64             0.0014             0.0017             0.0020             0.0034             0.0062                   0.0066             0.0077             0.0116             0.0180              0.0302                   0.1044              0.1490              0.0792              0.1418              0.2643
+2   128             0.0020             0.0027             0.0040             0.0061             0.0167                   0.0559             0.0614             0.0694             0.0942              0.1522                   0.2209              0.3315              0.2997              0.5212              0.9246
+3   256             0.0042             0.0039             0.0067             0.0165             0.0400                   0.2038             0.3125             0.2839             0.4321              0.6991                   0.4164              0.5637              0.8953              1.7364              2.9415
+4   512             0.0060             0.0078             0.0182             0.0412             0.0813                   1.2783             1.0986             1.3789             1.6888              2.6720                   0.4711              1.1745              2.1986              4.2304              7.7817
+
+--- Cell 9 Text: Problem 2 - Table 2 Runtimes (Stratified Rand)
+--- Cell 9 Text: ================================================================================
+--- Cell 9 Text: Problem 2 - Table 2 (N=32) Runtime (s)
+--- Cell 9 Text: ================================================================================
+=== Cell 9 Table ===
+     label      Uniform / FFT                                                          Fixed stratified / NUDFT                                                          Fixed stratified / NUFFT                                                            
+  quad_str            Simpson                           Trapezoidal                                     Simpson                           Trapezoidal                                     Simpson                             Trapezoidal                    
+    bc_str          Dirichlet            Neumann          Dirichlet            Neumann                Dirichlet            Neumann          Dirichlet            Neumann                Dirichlet             Neumann           Dirichlet             Neumann
+         M Unnamed: 1_level_3 Unnamed: 2_level_3 Unnamed: 3_level_3 Unnamed: 4_level_3       Unnamed: 5_level_3 Unnamed: 6_level_3 Unnamed: 7_level_3 Unnamed: 8_level_3       Unnamed: 9_level_3 Unnamed: 10_level_3 Unnamed: 11_level_3 Unnamed: 12_level_3
+0       32             0.0033             0.0077             0.0073             0.0029                   0.0040             0.0063             0.0068             0.0036                   0.0667              0.0668              0.0557              0.0583
+1       64             0.0036             0.0031             0.0040             0.0038                   0.0058             0.0060             0.0041             0.0047                   0.0775              0.0926              0.0685              0.0670
+2      128             0.0021             0.0018             0.0026             0.0020                   0.0069             0.0102             0.0078             0.0073                   0.0727              0.0983              0.0541              0.0428
+3      256             0.0033             0.0029             0.0046             0.0024                   0.0205             0.0225             0.0190             0.0185                   0.1041              0.1047              0.0642              0.1104
+4      512             0.0070             0.0045             0.0065             0.0059                   0.0379             0.0342             0.0338             0.0375                   0.1380              0.1367              0.1401              0.1580
+
+--- Cell 9 Text: Accuracy Comparison (Fixed M=32) Runtimes
+--- Cell 9 Text: ================================================================================
+--- Cell 9 Text: Accuracy Comparison (Fixed M=32) Runtime (s)
+--- Cell 9 Text: ================================================================================
+=== Cell 9 Table ===
+  label      Uniform / FFT    Uniform / NUDFT    Uniform / NUFFT Fixed clustered / NUDFT Fixed jittered / NUDFT Fixed rand / NUDFT Fixed sine / NUDFT Fixed stratified_rand / NUDFT Fixed clustered / NUFFT Fixed jittered / NUFFT  Fixed rand / NUFFT  Fixed sine / NUFFT Fixed stratified_rand / NUFFT
+      N Unnamed: 1_level_1 Unnamed: 2_level_1 Unnamed: 3_level_1      Unnamed: 4_level_1     Unnamed: 5_level_1 Unnamed: 6_level_1 Unnamed: 7_level_1            Unnamed: 8_level_1      Unnamed: 9_level_1    Unnamed: 10_level_1 Unnamed: 11_level_1 Unnamed: 12_level_1           Unnamed: 13_level_1
+0    32             0.0083             0.0104             0.0392                  0.0140                 0.0133             0.0061             0.0121                        0.0078                  0.3107                 0.0547              0.5055              0.3336                        0.0716
+1    64             0.0039             0.0074             0.0229                  0.0119                 0.0211             0.0122             0.0219                        0.0152                  0.1875                 0.0805              0.4995              0.3335                        0.1415
+2   128             0.0044             0.1333             0.0308                  0.0746                 0.1245             0.0936             0.1252                        0.1174                  0.5983                 0.1016              0.6198              0.3664                        0.4075
+3   256             0.0072             0.2981             0.0353                  0.2913                 0.4019             0.3963             0.3283                        0.3416                  0.8279                 0.1675              0.8319              0.1870                        0.6994
+4   512             0.0075             1.2926             0.0408                  1.1190                 1.3666             1.2420             1.2907                        1.1539                  0.7816                 0.3811              1.1407              0.5514                        1.2435
+
+--- Cell 9 Text: Accuracy Comparison (Fixed N=32) Runtimes
+--- Cell 9 Text: ================================================================================
+--- Cell 9 Text: Accuracy Comparison (Fixed N=32) Runtime (s)
+--- Cell 9 Text: ================================================================================
+=== Cell 9 Table ===
+  label      Uniform / FFT    Uniform / NUDFT    Uniform / NUFFT Fixed clustered / NUDFT Fixed jittered / NUDFT Fixed rand / NUDFT Fixed sine / NUDFT Fixed stratified_rand / NUDFT Fixed clustered / NUFFT Fixed jittered / NUFFT  Fixed rand / NUFFT  Fixed sine / NUFFT Fixed stratified_rand / NUFFT
+      M Unnamed: 1_level_1 Unnamed: 2_level_1 Unnamed: 3_level_1      Unnamed: 4_level_1     Unnamed: 5_level_1 Unnamed: 6_level_1 Unnamed: 7_level_1            Unnamed: 8_level_1      Unnamed: 9_level_1    Unnamed: 10_level_1 Unnamed: 11_level_1 Unnamed: 12_level_1           Unnamed: 13_level_1
+0    32             0.0027             0.0035             0.0215                  0.0047                 0.0062             0.0061             0.0052                        0.0055                  0.3100                 0.0440              0.2814              0.2844                        0.0510
+1    64             0.0030             0.0058             0.0237                  0.0093                 0.0044             0.0074             0.0062                        0.0077                  0.3193                 0.0440              0.3224              0.3008                        0.0527
+2   128             0.0033             0.0083             0.0257                  0.0086                 0.0101             0.0125             0.0081                        0.0099                  0.1509                 0.0787              0.1694              0.2335                        0.0508
+3   256             0.0025             0.0149             0.0311                  0.0159                 0.0167             0.0234             0.0142                        0.0136                  0.1921                 0.0711              0.2366              0.2621                        0.0525
+4   512             0.0043             0.0262             0.0507                  0.0321                 0.0285             0.0407             0.0281                        0.0288                  0.4128                 0.0967              0.4545              0.4597                        0.1011
+
