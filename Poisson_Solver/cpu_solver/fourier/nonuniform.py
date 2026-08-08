@@ -234,16 +234,6 @@ def _invert_nudft(theta_j, f, reg_param=1e-12):
     return lstsq(A, f, cond=reg_param)[0]
 
 
-    """w = _get_density_weights(theta)
-    w_sqrt = np.sqrt(w)
-    A_w = A * w_sqrt[:, None]
-
-    if f.ndim == 1:
-        f_w = f * w_sqrt
-    else:
-        f_w = f * w_sqrt[:, None]
-
-    return lstsq(A_w, f_w, cond=reg_param)[0]"""
 
 
 # ---------------------------------------------------------
