@@ -161,7 +161,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
         f_arr = f_orig
     N_pts, K = f_arr.shape
 
-    w = np.ones_like(theta_j)[:, None]  # (N_pts, 1) - Unweighted!
+    w = _get_density_weights(theta_j)[:, None]  # (N_pts, 1) - Weighted with trapezoidal
 
     # 1. Compute RHS: B_adj = A^H W f  (1 FINUFFT Adjoint)
     f_w = f_arr * w
