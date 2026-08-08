@@ -161,7 +161,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
         f_arr = f_orig
     N_pts, K = f_arr.shape
 
-    w = _get_density_weights(theta_j)[:, None]  # (N_pts, 1)
+    w = np.ones_like(theta_j)[:, None]  # (N_pts, 1) - Unweighted!
 
     # 1. Compute RHS: B_adj = A^H W f  (1 FINUFFT Adjoint)
     f_w = f_arr * w
@@ -193,10 +193,13 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
         ifft_T.execute()
         return (T_out[:, :N].copy() / (2.0 * N)) + (reg_param**2) * X
 
-    # 4. Circulant Preconditioner via Point Spread Function (PSF)
-    c_psf = v_raw[N // 2 : N // 2 + N]
-    c_psf_fft = np.fft.ifftshift(c_psf)
-    eig_c = np.abs(np.fft.fft(c_psf_fft)) + 1e-3
+    # 4. Circulant Preconditioner via T. Chan's Optimal Formula
+    # FINUFFT modes run from -N to N-1, so k=0 is at index N.
+    k = np.arange(N)
+    # Weighted average of the diagonals of the Toeplitz matrix
+    c_chan = ((N - k) / N) * v_raw[N : 2*N] + (k / N) * v_raw[0 : N]
+    
+    eig_c = np.abs(np.fft.fft(c_chan)) + 1e-3
     eig_c_inv = (1.0 / eig_c)[None, :]
 
     M_in = pyfftw.empty_aligned((K, N), dtype='complex128')
