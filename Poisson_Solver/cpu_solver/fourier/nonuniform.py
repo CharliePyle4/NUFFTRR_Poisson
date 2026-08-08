@@ -2,6 +2,8 @@ import numpy as np
 import finufft
 from scipy.linalg import lstsq
 import pyfftw
+import pyfftw.interfaces.numpy_fft as fftw_fft
+pyfftw.interfaces.cache.enable()
 import multiprocessing
 import scipy.fft as sp_fft
 
@@ -25,6 +27,70 @@ def _get_density_weights(theta: np.ndarray) -> np.ndarray:
         w = (th_ext[2:] - th_ext[:-2]) / (4.0 * np.pi)
         return w
     return np.ones_like(theta)
+
+
+'''def _compute_iterative_dcf(theta_j: np.ndarray, N_modes: int, iters: int = 15, eps: float = 1e-12) -> np.ndarray:
+    """
+    Computes mathematically optimal density compensation weights iteratively (Pipe-Menon algorithm).
+    Forces A A^* W = I to perfectly condition the Fourier matrix, eliminating geometric noise.
+    """
+    x_wrapped = _wrap_angles(theta_j)
+    w = _get_density_weights(theta_j)  # Use geometric weights as a good initial guess
+    
+    for _ in range(iters):
+        # 1. Spatial -> Modes (Adjoint NUFFT)
+        u = _nufft_adjoint(x_wrapped, w, N_modes=N_modes, eps=eps)
+        # 2. Modes -> Spatial (Forward NUFFT)
+        v = _nufft_forward(x_wrapped, u, eps=eps)
+        # 3. Update weights
+        w = w / (v.real + 1e-14)
+        
+    return w'''
+
+def _compute_fft_kde_weights(theta_j: np.ndarray) -> np.ndarray:
+    """
+    Density compensation via FFT-accelerated KDE on the circle — O(N log N).
+
+    Bins angles onto a fine uniform grid, convolves with a wrapped Gaussian
+    kernel via FFT, then interpolates the smoothed density back to the
+    original angle positions. Weights = 1/density, normalized to sum to 1.
+
+    Strictly positive by construction (convolution of a non-negative histogram
+    with a positive Gaussian kernel), preserving the SPD property of A^* W A
+    required by the Block CG solver.
+    """
+    N = theta_j.size
+    M = 4 * N  # Fine uniform grid (4x oversampled for interpolation accuracy)
+    dx = 2 * np.pi / M
+
+    # 1. Bin angles into uniform histogram on [0, 2pi)
+    bin_edges = np.linspace(0, 2 * np.pi, M + 1)
+    hist, _ = np.histogram(theta_j, bins=bin_edges)
+    grid_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+
+    # 2. Wrapped Gaussian kernel centered at 0
+    sigma = 2 * np.pi / N  # Bandwidth = average angular spacing
+    k = np.arange(M) * dx
+    k = np.mod(k + np.pi, 2 * np.pi) - np.pi  # Wrap to [-pi, pi)
+    kernel = np.exp(-0.5 * (k / sigma) ** 2)
+
+    # 3. Circular convolution via FFT -> density at each grid center
+    n_threads = multiprocessing.cpu_count()
+    density_grid = fftw_fft.irfft(
+        fftw_fft.rfft(hist.astype(float), threads=n_threads)
+        * fftw_fft.rfft(kernel, threads=n_threads),
+        n=M, threads=n_threads
+    )
+
+    # 4. Interpolate density to original angle positions (periodic)
+    density = np.interp(theta_j, grid_centers, density_grid, period=2 * np.pi)
+
+    # 5. Invert density -> weights, normalize so sum(w) = 1
+    w = 1.0 / density
+    w = w / np.sum(w)
+
+    return w
+
 
 
 def _is_matrix(a: np.ndarray) -> bool:
@@ -161,7 +227,10 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
         f_arr = f_orig
     N_pts, K = f_arr.shape
 
-    w = _get_density_weights(theta_j)[:, None]  # (N_pts, 1) - Weighted with trapezoidal
+    
+    
+    #w = _compute_iterative_dcf(theta_j, N, iters=15, eps=eps)[:, None]  # Optimal iterative weights
+    w = _compute_fft_kde_weights(theta_j)[:, None]  # FFT-KDE weights (O(N log N), strictly positive)
 
     # 1. Compute RHS: B_adj = A^H W f  (1 FINUFFT Adjoint)
     f_w = f_arr * w
@@ -171,8 +240,8 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
     n_threads = multiprocessing.cpu_count()
 
     v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps)  # (2N,)
-    v_shift = np.fft.ifftshift(v_raw)
-    V_hat = np.fft.fft(v_shift)[None, :]  # (1, 2N)
+    v_shift = fftw_fft.ifftshift(v_raw)
+    V_hat = fftw_fft.fft(v_shift, threads=n_threads)[None, :]  # (1, 2N)
 
     # Pre-allocate aligned arrays and build FFTW plans for T_op
     T_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
@@ -199,7 +268,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
     # Weighted average of the diagonals of the Toeplitz matrix
     c_chan = ((N - k) / N) * v_raw[N : 2*N] + (k / N) * v_raw[0 : N]
     
-    eig_c = np.abs(np.fft.fft(c_chan)) + 1e-3
+    eig_c = np.abs(fftw_fft.fft(c_chan, threads=n_threads)) + 1e-3
     eig_c_inv = (1.0 / eig_c)[None, :]
 
     M_in = pyfftw.empty_aligned((K, N), dtype='complex128')
@@ -211,11 +280,11 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
     ifft_M = pyfftw.FFTW(M_ifft_in, M_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads)
 
     def M_inv(V):
-        M_in[:] = np.fft.ifftshift(V, axes=1)
+        M_in[:] = fftw_fft.ifftshift(V, axes=1)
         fft_M.execute()
         M_ifft_in[:] = M_hat * eig_c_inv
         ifft_M.execute()
-        return np.fft.fftshift(M_out / N, axes=1).copy()
+        return fftw_fft.fftshift(M_out / N, axes=1).copy()
 
     # 5. Solve using Block CG (Normal Equations)
     X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
