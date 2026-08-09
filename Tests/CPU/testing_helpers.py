@@ -284,7 +284,7 @@ def plot_accuracy_table1(df, title_prefix="Table 1"):
     - Top row (3 subplots): Error vs M for FFT, NUDFT, NUFFT
     - Bottom row (3 subplots): Error vs N for FFT, NUDFT, NUFFT
     """
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10), sharey=True)
     methods = df["label"].unique()
     
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
@@ -332,7 +332,7 @@ def plot_runtime_table1(df, title_prefix="Table 1"):
     
     num_cols = max(len(N_vals), len(M_vals))
     
-    fig, axes = plt.subplots(2, num_cols, figsize=(5 * num_cols, 10))
+    fig, axes = plt.subplots(2, num_cols, figsize=(5 * num_cols, 10), sharey=True)
     
     # Ensure axes is 2D even if num_cols is 1
     if num_cols == 1:
@@ -381,7 +381,7 @@ def plot_accuracy_table2(df, title_prefix="Table 2"):
     comparing FFT, NUDFT, and NUFFT vs M.
     """
     df_fmt = _prepare_table2_df(df)
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=True)
     combos = [
         ("Trapezoidal", "Dirichlet", axes[0, 0]),
         ("Trapezoidal", "Neumann", axes[0, 1]),
@@ -409,7 +409,7 @@ def plot_runtime_table2(df, title_prefix="Table 2"):
     comparing FFT, NUDFT, and NUFFT vs M.
     """
     df_fmt = _prepare_table2_df(df)
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=True)
     combos = [
         ("Trapezoidal", "Dirichlet", axes[0, 0]),
         ("Trapezoidal", "Neumann", axes[0, 1]),
@@ -437,7 +437,7 @@ def plot_accuracy_comparison(df, index_col="N", title_prefix="Accuracy Compariso
     Subplot 2: NUDFT methods (All meshes)
     Subplot 3: NUFFT methods (All meshes)
     """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
     methods = df["label"].unique()
     
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
@@ -467,7 +467,7 @@ def plot_runtime_comparison(df, index_col="N", title_prefix="Accuracy Comparison
     Subplot 2: NUDFT methods (All meshes)
     Subplot 3: NUFFT methods (All meshes)
     """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
     methods = df["label"].unique()
     
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
