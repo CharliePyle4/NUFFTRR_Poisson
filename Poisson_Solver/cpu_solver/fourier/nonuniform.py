@@ -151,12 +151,8 @@ def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
 # Block CG (Conjugate Gradient for Normal Equations)
 # ---------------------------------------------------------
 def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
-    """
-    Block Conjugate Gradient for solving symmetric positive definite systems T * X = B.
-    B has shape (K, N).
-    """
-    X = np.zeros_like(B)
-    R = B.copy()
+    X = B.copy()
+    R = B - T_op(X)
 
     if M_inv is not None:
         Z = M_inv(R)
