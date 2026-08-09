@@ -146,7 +146,8 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
                 azu_unif=solver_azu,
                 use_nudft_angular=nudft_flag,
                 maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
-                tol_nufft=GLOBAL_CONFIG['tol_nufft']
+                tol_nufft=GLOBAL_CONFIG['tol_nufft'],
+                reg_param=GLOBAL_CONFIG['reg_param']
             )
             runtime = time.perf_counter() - t0
 
@@ -667,7 +668,8 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False):
                 azu_unif=solver_azu,
                 use_nudft_angular=nudft_flag,
                 maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
-                tol_nufft=GLOBAL_CONFIG['tol_nufft']
+                tol_nufft=GLOBAL_CONFIG['tol_nufft'],
+                reg_param=GLOBAL_CONFIG['reg_param']
             )
             runtime = time.perf_counter() - t0
             _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)

@@ -242,7 +242,6 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
     v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps)  # (2N,)
     v_shift = fftw_fft.ifftshift(v_raw)
     V_hat = fftw_fft.fft(v_shift, threads=n_threads)[None, :]  # (1, 2N)
-
     # Pre-allocate aligned arrays and build FFTW plans for T_op
     T_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
     T_hat = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
@@ -260,7 +259,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
         fft_T.execute()
         T_ifft_in[:] = T_hat * V_hat
         ifft_T.execute()
-        return (T_out[:, :N].copy() / (2.0 * N)) + (reg_param**2) * X
+        return (T_out[:, :N].copy() / (2.0 * N)) + (reg_param) * X
 
     # 4. Circulant Preconditioner via T. Chan's Optimal Formula
     # FINUFFT modes run from -N to N-1, so k=0 is at index N.
