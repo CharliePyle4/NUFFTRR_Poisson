@@ -481,14 +481,23 @@ def plot_accuracy_table1(df, title_prefix="Table 1"):
     - Top row (3 subplots): Error vs M for FFT, NUDFT, NUFFT
     - Bottom row (3 subplots): Error vs N for FFT, NUDFT, NUFFT
     """
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10), sharey=True)
     methods = df["label"].unique()
-    
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
     m_nudft = [m for m in methods if "NUDFT" in m]
-    m_nufft = [m for m in methods if "NUFFT" in m]
+    m_nufft_t = [m for m in methods if "NUFFT" in m and "Toeplitz" in m]
+    m_nufft_u = [m for m in methods if "NUFFT" in m and "Unsquared" in m]
+    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m]
     
-    solver_groups = [("Uniform / FFT", m_fft), ("NUDFT", m_nudft), ("NUFFT", m_nufft)]
+    solver_groups = []
+    if m_fft: solver_groups.append(("Uniform / FFT", m_fft))
+    if m_nudft: solver_groups.append(("NUDFT", m_nudft))
+    if m_nufft_gen: solver_groups.append(("NUFFT", m_nufft_gen))
+    if m_nufft_t: solver_groups.append(("NUFFT (Toeplitz)", m_nufft_t))
+    if m_nufft_u: solver_groups.append(("NUFFT (Unsquared)", m_nufft_u))
+    
+    num_cols = len(solver_groups)
+    fig, axes = plt.subplots(2, num_cols, figsize=(6 * num_cols, 10), sharey=True)
+    if num_cols == 1: axes = axes.reshape(2, 1)
     
     # Top Row: Error vs M (for each N)
     for col_idx, (s_name, s_methods) in enumerate(solver_groups):
@@ -634,14 +643,25 @@ def plot_accuracy_comparison(df, index_col="N", title_prefix="Accuracy Compariso
     Subplot 2: NUDFT methods (All meshes)
     Subplot 3: NUFFT methods (All meshes)
     """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
     methods = df["label"].unique()
-    
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
     m_nudft = [m for m in methods if "NUDFT" in m]
-    m_nufft = [m for m in methods if "NUFFT" in m]
+    m_nufft_t = [m for m in methods if "NUFFT" in m and "Toeplitz" in m]
+    m_nufft_u = [m for m in methods if "NUFFT" in m and "Unsquared" in m]
+    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m]
     
-    solver_groups = [("Uniform / FFT", m_fft, axes[0]), ("NUDFT", m_nudft, axes[1]), ("NUFFT", m_nufft, axes[2])]
+    groups = []
+    if m_fft: groups.append(("Uniform / FFT", m_fft))
+    if m_nudft: groups.append(("NUDFT", m_nudft))
+    if m_nufft_gen: groups.append(("NUFFT", m_nufft_gen))
+    if m_nufft_t: groups.append(("NUFFT (Toeplitz)", m_nufft_t))
+    if m_nufft_u: groups.append(("NUFFT (Unsquared)", m_nufft_u))
+    
+    num_cols = len(groups)
+    fig, axes = plt.subplots(1, num_cols, figsize=(6 * num_cols, 5), sharey=True)
+    if num_cols == 1: axes = [axes]
+    
+    solver_groups = [(g[0], g[1], axes[i]) for i, g in enumerate(groups)]
     
     for s_name, s_methods, ax in solver_groups:
         df_sub = df[df["label"].isin(s_methods)]
@@ -664,14 +684,25 @@ def plot_runtime_comparison(df, index_col="N", title_prefix="Accuracy Comparison
     Subplot 2: NUDFT methods (All meshes)
     Subplot 3: NUFFT methods (All meshes)
     """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
     methods = df["label"].unique()
-    
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
     m_nudft = [m for m in methods if "NUDFT" in m]
-    m_nufft = [m for m in methods if "NUFFT" in m]
+    m_nufft_t = [m for m in methods if "NUFFT" in m and "Toeplitz" in m]
+    m_nufft_u = [m for m in methods if "NUFFT" in m and "Unsquared" in m]
+    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m]
     
-    solver_groups = [("Uniform / FFT", m_fft, axes[0]), ("NUDFT", m_nudft, axes[1]), ("NUFFT", m_nufft, axes[2])]
+    groups = []
+    if m_fft: groups.append(("Uniform / FFT", m_fft))
+    if m_nudft: groups.append(("NUDFT", m_nudft))
+    if m_nufft_gen: groups.append(("NUFFT", m_nufft_gen))
+    if m_nufft_t: groups.append(("NUFFT (Toeplitz)", m_nufft_t))
+    if m_nufft_u: groups.append(("NUFFT (Unsquared)", m_nufft_u))
+    
+    num_cols = len(groups)
+    fig, axes = plt.subplots(1, num_cols, figsize=(6 * num_cols, 5), sharey=True)
+    if num_cols == 1: axes = [axes]
+    
+    solver_groups = [(g[0], g[1], axes[i]) for i, g in enumerate(groups)]
     
     for s_name, s_methods, ax in solver_groups:
         df_sub = df[df["label"].isin(s_methods)]
