@@ -6,7 +6,7 @@ from pynufft import NUFFT
 def poisson_solver(f_values, g_values, u_fourier_0,
                    N, M, r_m, theta_j, R,
                    quad_rule, BC_choice,
-                   rad_unif, azu_unif,
+                   rad_unif, grid_type,
                    use_nudft_angular: bool = False,
                    maxiter_nufft: int = 50,
                    tol_nufft: float = 1e-8,
@@ -21,12 +21,12 @@ def poisson_solver(f_values, g_values, u_fourier_0,
     Solve Δu = f on a disk of radius R in polar coords using Fourier-in-θ
     and radial integration (C, D).
 
-    azu_unif:
-        2 -> Uniform angular grid in θ (standard FFT).
-        1 -> Shared non-uniform angular grid in θ (NUFFT / NUDFT).
+    grid_type:
+        1 -> Uniform angular grid in θ (standard FFT).
+        2, 3 -> Shared non-uniform angular grid in θ (NUFFT / NUDFT).
 
     use_nudft_angular:
-        Only used when azu_unif == 1 (nonuniform angles).
+        Only used when grid_type in (2, 3) (nonuniform angles).
         False (default) -> NUFFT + block CG (fast).
         True            -> direct NUDFT solve (dense, reference).
     """
@@ -48,7 +48,7 @@ def poisson_solver(f_values, g_values, u_fourier_0,
         quad_rule=quad_rule,
         BC_choice=BC_choice,
         rad_unif=rad_unif,
-        azu_unif=azu_unif,
+        grid_type=grid_type,
         use_nudft_angular=use_nudft_angular,
         maxiter_nufft=maxiter_nufft,
         tol_nufft=tol_nufft,

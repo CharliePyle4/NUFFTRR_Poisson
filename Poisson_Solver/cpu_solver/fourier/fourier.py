@@ -18,7 +18,7 @@ from .nonuniform import (
 def compute_angular_fourier_coefficients(f_values: np.ndarray,
                                          g_values: np.ndarray,
                                          theta_j,
-                                         azu_unif: int,
+                                         grid_type: int,
                                          use_nudft_angular: bool = True,
                                          maxiter_nufft: int = 50,
                                          tol_nufft: float = 1e-8,
@@ -31,25 +31,25 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
     """
     Compute angular Fourier coefficients (analysis step) for f and g.
 
-    azu_unif:
-      2 → uniform FFT
-      1 → shared nonuniform mesh, theta_j shape (N,)
+    grid_type:
+      1 → uniform FFT
+      2, 3 → shared nonuniform mesh, theta_j shape (N,)
     """
     f_values = np.asarray(f_values)
     g_values = np.asarray(g_values)
 
-    if azu_unif == 2:
+    if grid_type == 1:
         # Uniform angles → standard FFT-based coefficients
         f_fc = compute_fourier_coeff_unif(f_values)
         g_fc = compute_fourier_coeff_unif(g_values)
         return f_fc, g_fc
 
-    elif azu_unif == 1:
+    elif grid_type in (2, 3):
         # Nonuniform but shared mesh: theta_j is 1D of length N
         theta = np.asarray(theta_j, dtype=float)
         if theta.ndim != 1 or theta.size != f_values.shape[0]:
             raise ValueError(
-                "For azu_unif == 1, theta_j must be 1D of length N "
+                "For grid_type 2 or 3, theta_j must be 1D of length N "
                 "matching the first dimension of f_values"
             )
 
@@ -65,6 +65,7 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
         combined_fc = compute_fourier_coeff_nonunif(
             combined,
             theta,
+            grid_type=grid_type,
             maxiter=maxiter_nufft,
             tol=tol_nufft,
             use_nudft=use_nudft_angular,
@@ -79,8 +80,8 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
 
     else:
         raise ValueError(
-            f'Incorrect index for "azu_unif": {azu_unif}. '
-            'Supported values are 2 (uniform) and 1 (shared nonuniform).'
+            f'Incorrect index for "grid_type": {grid_type}. '
+            'Supported values are 1 (uniform), 2, 3 (nonuniform).'
         )
 
 
@@ -90,11 +91,11 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
 def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
                                     theta_j,
                                     N: int,
-                                    azu_unif: int,
+                                    grid_type: int,
                                     eps: float = 1e-12) -> np.ndarray:
     """
-    azu_unif == 2: uniform IFFT
-    azu_unif == 1: shared nonuniform, NUFFT-2, theta_j (N,)
+    grid_type == 1: uniform IFFT
+    grid_type in (2, 3): shared nonuniform, NUFFT-2, theta_j (N,)
     """
     u_fourier_coeff = np.asarray(u_fourier_coeff)
     Np1, M = u_fourier_coeff.shape
@@ -103,7 +104,7 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
 
     halfN = N // 2
 
-    if azu_unif == 2:
+    if grid_type == 1:
         n_threads = multiprocessing.cpu_count()
         
         coeff    = np.vstack([u_fourier_coeff[halfN:N, :],
@@ -111,10 +112,10 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
         u_approx = fftw_fft.ifft(coeff, axis=0, threads=n_threads) * N
         return u_approx
 
-    elif azu_unif == 1:
+    elif grid_type in (2, 3):
         theta = np.asarray(theta_j, dtype=float)
         if theta.ndim != 1 or theta.size != N:
-            raise ValueError("theta_j must be 1D of length N when azu_unif == 1")
+            raise ValueError("theta_j must be 1D of length N when grid_type in (2, 3)")
         x        = np.ascontiguousarray(_wrap_angles(theta))
         coeff    = u_fourier_coeff[:N, :].copy()
         coeff[0, :] += u_fourier_coeff[N, :]  # Recombine the split Nyquist mode (k = -N/2 and +N/2)
@@ -124,8 +125,8 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
 
     else:
         raise ValueError(
-            f'Incorrect index for "azu_unif": {azu_unif}. '
-            'Supported values are 2 (uniform) and 1 (shared nonuniform).'
+            f'Incorrect index for "grid_type": {grid_type}. '
+            'Supported values are 1 (uniform), 2, 3 (nonuniform).'
         )
 
 

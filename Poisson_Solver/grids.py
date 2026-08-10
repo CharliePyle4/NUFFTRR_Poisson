@@ -323,7 +323,7 @@ def compute_zero_mode(u_true: np.ndarray, theta_j: np.ndarray, azu_unif: int) ->
             f_values=u_true,
             g_values=u_true[:, -1],
             theta_j=theta_j,
-            azu_unif=azu_unif,
+            grid_type=1 if azu_unif == 2 else 3,
             use_nudft_angular=True
         )
         u_fourier_0 = f_fc[halfN, :]

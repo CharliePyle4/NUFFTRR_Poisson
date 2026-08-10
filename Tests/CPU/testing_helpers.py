@@ -306,13 +306,27 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
         if mute:
             warnings.simplefilter("ignore")
 
+        if "grid_type" in method:
+            grid_type = method["grid_type"]
+        else:
+            if solver_azu == 2:
+                grid_type = 1
+            elif solver_azu == 1:
+                mesh_kind = method.get("mesh_kind", "")
+                if mesh_kind in ("jittered", "stratified_rand", "stratified_random", "stratified"):
+                    grid_type = 2
+                else:
+                    grid_type = 3
+            else:
+                grid_type = solver_azu
+
         try:
             u_approx = poisson_solver(
                 f_values, g_values, u_fourier_0,
                 N, M, iRadius, iAngle, R,
                 quad_rule=quad_rule, BC_choice=bc_choice,
                 rad_unif=RAD_UNIF,
-                azu_unif=solver_azu,
+                grid_type=grid_type,
                 use_nudft_angular=nudft_flag,
                 maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
                 tol_nufft=GLOBAL_CONFIG['tol_nufft'],
@@ -718,10 +732,25 @@ def run_and_plot_errors_vary_m(N_fixed, M_values, methods, bc_choice=1, quad_rul
 
             u_fourier_0 = compute_zero_mode(u_t, iAngle, method["azu_unif"])[-1] if bc_choice == 2 else np.array([])
 
+            solver_azu = method.get("solver_azu_unif", method["azu_unif"])
+            if "grid_type" in method:
+                grid_type = method["grid_type"]
+            else:
+                if solver_azu == 2:
+                    grid_type = 1
+                elif solver_azu == 1:
+                    mesh_kind = method.get("mesh_kind", "")
+                    if mesh_kind in ("jittered", "stratified_rand", "stratified_random", "stratified"):
+                        grid_type = 2
+                    else:
+                        grid_type = 3
+                else:
+                    grid_type = solver_azu
+
             try:
                 u_approx = poisson_solver(
                     f_values, g_values, u_fourier_0, N_fixed, M, iRadius, iAngle, R,
-                    quad_rule=quad_rule, BC_choice=bc_choice, rad_unif=RAD_UNIF, azu_unif=method.get("solver_azu_unif", method["azu_unif"]),
+                    quad_rule=quad_rule, BC_choice=bc_choice, rad_unif=RAD_UNIF, grid_type=grid_type,
                     use_nudft_angular=method.get("use_nudft", False)
                 )
                 _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)

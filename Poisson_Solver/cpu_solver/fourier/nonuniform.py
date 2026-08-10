@@ -245,130 +245,131 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
 # =============================================================================
 # PREVIOUS NORMAL-EQUATIONS BLOCK CG SOLVER (COMMENTED OUT FOR REFERENCE)
 # =============================================================================
-# def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
-#     X = B.copy()
-#     R = B - T_op(X)
-#
-#     if M_inv is not None:
-#         Z = M_inv(R)
-#     else:
-#         Z = R.copy()
-#
-#     P = Z.copy()
-#     gamma = np.vdot(R, Z).real
-#
-#     if gamma <= 0.0 or np.isnan(gamma):
-#         return X
-#
-#     norm_b_sq = np.einsum('ij,ij->i', B.real, B.real) + np.einsum('ij,ij->i', B.imag, B.imag)
-#     norm_b_denom_sq = (np.sqrt(norm_b_sq) + 1e-14)**2
-#     tol2 = tol * tol
-#
-#     col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
-#     if np.max(col_res_sq / norm_b_denom_sq) < tol2:
-#         return X
-#
-#     for _ in range(maxiter):
-#         TP = T_op(P)
-#         delta = np.vdot(P, TP).real
-#         if delta <= 0 or np.isnan(delta):
-#             break
-#
-#         alpha = gamma / delta
-#
-#         X += alpha * P
-#         R -= alpha * TP
-#
-#         col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
-#         if np.max(col_res_sq / norm_b_denom_sq) < tol2:
-#             break
-#
-#         if M_inv is not None:
-#             Z_new = M_inv(R)
-#         else:
-#             Z_new = R.copy()
-#
-#         gamma_new = np.vdot(R, Z_new).real
-#         if gamma_new < 1e-28:
-#             break
-#
-#         beta = gamma_new / (gamma + 1e-14)
-#         P *= beta
-#         P += Z_new
-#         gamma = gamma_new
-#
-#     return X
-#
-#
-# def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12, reg_param=1e-12,
-#                                     precond_shift=1e-3, kde_oversample=4, kde_bandwidth=1.0, **kwargs):
-#     theta_j = np.asarray(theta_j, dtype=float)
-#     f_orig = np.asarray(f, dtype=np.complex128)
-#     N = theta_j.size
-#
-#     x_wrapped = _wrap_angles(theta_j)
-#     if f_orig.ndim == 1:
-#         f_arr = f_orig[:, None]
-#     else:
-#         f_arr = f_orig
-#     N_pts, K = f_arr.shape
-#
-#     w = _compute_fft_kde_weights(theta_j, oversample=kde_oversample, bandwidth_factor=kde_bandwidth)[:, None]
-#
-#     # 1. Compute RHS: B_adj = A^H W f  (1 FINUFFT Adjoint)
-#     f_w = f_arr * w
-#     B_adj = _nufft_adjoint(x_wrapped, f_w, N_modes=N, eps=eps).T  # (K, N)
-#
-#     # 2. Compute Toeplitz kernel from weights (1 FINUFFT Adjoint, double resolution)
-#     n_threads = multiprocessing.cpu_count()
-#
-#     v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps)  # (2N,)
-#     v_shift = fftw_fft.ifftshift(v_raw)
-#     V_hat = fftw_fft.fft(v_shift, threads=n_threads)[None, :]  # (1, 2N)
-#     # Pre-allocate aligned arrays and build FFTW plans for T_op
-#     T_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
-#     T_hat = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
-#     fft_T = pyfftw.FFTW(T_in, T_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads)
-#
-#     T_ifft_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
-#     T_out = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
-#     ifft_T = pyfftw.FFTW(T_ifft_in, T_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads)
-#
-#     # 3. Fast Toeplitz Matrix-Vector Multiplication via FFT
-#     def T_op(X):
-#         T_in[:] = 0.0
-#         T_in[:, :N] = X
-#         fft_T.execute()
-#         T_ifft_in[:] = T_hat * V_hat
-#         ifft_T.execute()
-#         return (T_out[:, :N].copy() / (2.0 * N)) + (reg_param) * X
-#
-#     # 4. Circulant Preconditioner via T. Chan's Optimal Formula
-#     k = np.arange(N)
-#     c_chan = ((N - k) / N) * v_raw[N : 2*N] + (k / N) * v_raw[0 : N]
-#     
-#     eig_c = np.abs(fftw_fft.fft(c_chan, threads=n_threads)) + precond_shift
-#     eig_c_inv = (1.0 / eig_c)[None, :]
-#
-#     M_in = pyfftw.empty_aligned((K, N), dtype='complex128')
-#     M_hat = pyfftw.empty_aligned((K, N), dtype='complex128')
-#     fft_M = pyfftw.FFTW(M_in, M_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads)
-#
-#     M_ifft_in = pyfftw.empty_aligned((K, N), dtype='complex128')
-#     M_out = pyfftw.empty_aligned((K, N), dtype='complex128')
-#     ifft_M = pyfftw.FFTW(M_ifft_in, M_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads)
-#
-#     def M_inv(V):
-#         M_in[:] = fftw_fft.ifftshift(V, axes=1)
-#         fft_M.execute()
-#         M_ifft_in[:] = M_hat * eig_c_inv
-#         ifft_M.execute()
-#         return fftw_fft.fftshift(M_out / N, axes=1).copy()
-#
-#     # 5. Solve using Block CG (Normal Equations)
-#     X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
-#     X = X_T.T
-#     return X[:, 0] if f_orig.ndim == 1 else X
+def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
+    X = B.copy()
+    R = B - T_op(X)
+
+    if M_inv is not None:
+        Z = M_inv(R)
+    else:
+        Z = R.copy()
+
+    P = Z.copy()
+    gamma = np.vdot(R, Z).real
+
+    if gamma <= 0.0 or np.isnan(gamma):
+        return X
+
+    norm_b_sq = np.einsum('ij,ij->i', B.real, B.real) + np.einsum('ij,ij->i', B.imag, B.imag)
+    norm_b_denom_sq = (np.sqrt(norm_b_sq) + 1e-14)**2
+    tol2 = tol * tol
+
+    col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
+    if np.max(col_res_sq / norm_b_denom_sq) < tol2:
+        return X
+
+    for _ in range(maxiter):
+        TP = T_op(P)
+        delta = np.vdot(P, TP).real
+        if delta <= 0 or np.isnan(delta):
+            break
+
+        alpha = gamma / delta
+
+        X += alpha * P
+        R -= alpha * TP
+
+        col_res_sq = np.einsum('ij,ij->i', R.real, R.real) + np.einsum('ij,ij->i', R.imag, R.imag)
+        if np.max(col_res_sq / norm_b_denom_sq) < tol2:
+            break
+
+        if M_inv is not None:
+            Z_new = M_inv(R)
+        else:
+            Z_new = R.copy()
+
+        gamma_new = np.vdot(R, Z_new).real
+        if gamma_new < 1e-28:
+            break
+
+        beta = gamma_new / (gamma + 1e-14)
+        P *= beta
+        P += Z_new
+        gamma = gamma_new
+
+    return X
+
+
+def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12, reg_param=1e-12,
+                                    precond_shift=1e-3, kde_oversample=4, kde_bandwidth=1.0, **kwargs):
+    theta_j = np.asarray(theta_j, dtype=float)
+    f_orig = np.asarray(f, dtype=np.complex128)
+    N = theta_j.size
+
+    x_wrapped = _wrap_angles(theta_j)
+    if f_orig.ndim == 1:
+        f_arr = f_orig[:, None]
+    else:
+        f_arr = f_orig
+    N_pts, K = f_arr.shape
+
+    w = _compute_fft_kde_weights(theta_j, oversample=kde_oversample, bandwidth_factor=kde_bandwidth)[:, None]
+
+    # 1. Compute RHS: B_adj = A^H W f  (1 FINUFFT Adjoint)
+    f_w = f_arr * w
+    B_adj = _nufft_adjoint(x_wrapped, f_w, N_modes=N, eps=eps).T  # (K, N)
+
+    # 2. Compute Toeplitz kernel from weights (1 FINUFFT Adjoint, double resolution)
+    n_threads = multiprocessing.cpu_count()
+
+    v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps)  # (2N,)
+    v_shift = fftw_fft.ifftshift(v_raw)
+    V_hat = fftw_fft.fft(v_shift, threads=n_threads)[None, :]  # (1, 2N)
+    # Pre-allocate aligned arrays and build FFTW plans for T_op
+    T_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
+    T_hat = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
+    fft_T = pyfftw.FFTW(T_in, T_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads)
+
+    T_ifft_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
+    T_out = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
+    ifft_T = pyfftw.FFTW(T_ifft_in, T_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads)
+
+    # 3. Fast Toeplitz Matrix-Vector Multiplication via FFT
+    def T_op(X):
+        T_in[:] = 0.0
+        T_in[:, :N] = X
+        fft_T.execute()
+        T_ifft_in[:] = T_hat * V_hat
+        ifft_T.execute()
+        return (T_out[:, :N].copy() / (2.0 * N)) + (reg_param) * X
+
+    # 4. Circulant Preconditioner via T. Chan's Optimal Formula
+    k = np.arange(N)
+    c_chan = ((N - k) / N) * v_raw[N : 2*N] + (k / N) * v_raw[0 : N]
+    
+    eig_c = np.abs(fftw_fft.fft(c_chan, threads=n_threads)) + precond_shift
+    eig_c_inv = (1.0 / eig_c)[None, :]
+
+    M_in = pyfftw.empty_aligned((K, N), dtype='complex128')
+    M_hat = pyfftw.empty_aligned((K, N), dtype='complex128')
+    fft_M = pyfftw.FFTW(M_in, M_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads)
+
+    M_ifft_in = pyfftw.empty_aligned((K, N), dtype='complex128')
+    M_out = pyfftw.empty_aligned((K, N), dtype='complex128')
+    ifft_M = pyfftw.FFTW(M_ifft_in, M_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads)
+
+    def M_inv(V):
+        M_in[:] = fftw_fft.ifftshift(V, axes=1)
+        fft_M.execute()
+        M_ifft_in[:] = M_hat * eig_c_inv
+        ifft_M.execute()
+        return fftw_fft.fftshift(M_out / N, axes=1).copy()
+
+    # 5. Solve using Block CG (Normal Equations)
+    X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
+    X = X_T.T
+    return X[:, 0] if f_orig.ndim == 1 else X
+
 
 
 # ---------------------------------------------------------
@@ -390,6 +391,7 @@ def _invert_nudft(theta_j, f, reg_param=1e-20):
 # ---------------------------------------------------------
 def compute_fourier_coeff_nonunif(f_values: np.ndarray,
                                   theta_j: np.ndarray,
+                                  grid_type: int = 3,
                                   maxiter: int = 200,
                                   tol: float = 1e-10,
                                   use_nudft: bool = False,
@@ -407,6 +409,13 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
 
     if use_nudft:
         coeff_core = _invert_nudft(theta_j, f_values, reg_param=reg_param)
+    elif grid_type == 2:
+        coeff_core = _invert_nufft_block_cgls_shared(
+            theta_j, f_values,
+            tol=tol, maxiter=maxiter, eps=eps,
+            reg_param=reg_param,
+            **kwargs
+        )
     else:
         coeff_core = _invert_nufft_cgls_unsquared(
             theta_j, f_values,
