@@ -29,25 +29,9 @@ def _get_density_weights(theta: np.ndarray) -> np.ndarray:
     return np.ones_like(theta)
 
 
-'''def _compute_iterative_dcf(theta_j: np.ndarray, N_modes: int, iters: int = 15, eps: float = 1e-12) -> np.ndarray:
-    """
-    Computes mathematically optimal density compensation weights iteratively (Pipe-Menon algorithm).
-    Forces A A^* W = I to perfectly condition the Fourier matrix, eliminating geometric noise.
-    """
-    x_wrapped = _wrap_angles(theta_j)
-    w = _get_density_weights(theta_j)  # Use geometric weights as a good initial guess
-    
-    for _ in range(iters):
-        # 1. Spatial -> Modes (Adjoint NUFFT)
-        u = _nufft_adjoint(x_wrapped, w, N_modes=N_modes, eps=eps)
-        # 2. Modes -> Spatial (Forward NUFFT)
-        v = _nufft_forward(x_wrapped, u, eps=eps)
-        # 3. Update weights
-        w = w / (v.real + 1e-14)
-        
-    return w'''
 
-def _compute_fft_kde_weights(theta_j: np.ndarray) -> np.ndarray:
+
+def _compute_fft_kde_weights(theta_j: np.ndarray, oversample: int = 4, bandwidth_factor: float = 1.0) -> np.ndarray:
     """
     Density compensation via FFT-accelerated KDE on the circle — O(N log N).
 
@@ -60,7 +44,7 @@ def _compute_fft_kde_weights(theta_j: np.ndarray) -> np.ndarray:
     required by the Block CG solver.
     """
     N = theta_j.size
-    M = 4 * N  # Fine uniform grid (4x oversampled for interpolation accuracy)
+    M = int(oversample * N)  # Fine uniform grid (oversampled for interpolation accuracy)
     dx = 2 * np.pi / M
 
     # 1. Bin angles into uniform histogram on [0, 2pi)
@@ -69,7 +53,7 @@ def _compute_fft_kde_weights(theta_j: np.ndarray) -> np.ndarray:
     grid_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
 
     # 2. Wrapped Gaussian kernel centered at 0
-    sigma = 2 * np.pi / N  # Bandwidth = average angular spacing
+    sigma = float(bandwidth_factor) * (2 * np.pi / N)  # Bandwidth
     k = np.arange(M) * dx
     k = np.mod(k + np.pi, 2 * np.pi) - np.pi  # Wrap to [-pi, pi)
     kernel = np.exp(-0.5 * (k / sigma) ** 2)
@@ -211,7 +195,8 @@ def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
 # ---------------------------------------------------------
 # Invert NUFFT via Block CG & Toeplitz Embedding — shared mesh (azu_unif == 1)
 # ---------------------------------------------------------
-def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, reg_param=1e-12):
+def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12, reg_param=1e-12,
+                                    precond_shift=1e-3, kde_oversample=4, kde_bandwidth=1.0, **kwargs):
     theta_j = np.asarray(theta_j, dtype=float)
     f_orig = np.asarray(f, dtype=np.complex128)
     N = theta_j.size
@@ -223,10 +208,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
         f_arr = f_orig
     N_pts, K = f_arr.shape
 
-    
-    
-    #w = _compute_iterative_dcf(theta_j, N, iters=15, eps=eps)[:, None]  # Optimal iterative weights
-    w = _compute_fft_kde_weights(theta_j)[:, None]  # FFT-KDE weights (O(N log N), strictly positive)
+    w = _compute_fft_kde_weights(theta_j, oversample=kde_oversample, bandwidth_factor=kde_bandwidth)[:, None]
 
     # 1. Compute RHS: B_adj = A^H W f  (1 FINUFFT Adjoint)
     f_w = f_arr * w
@@ -263,7 +245,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
     # Weighted average of the diagonals of the Toeplitz matrix
     c_chan = ((N - k) / N) * v_raw[N : 2*N] + (k / N) * v_raw[0 : N]
     
-    eig_c = np.abs(fftw_fft.fft(c_chan, threads=n_threads)) + 1e-3
+    eig_c = np.abs(fftw_fft.fft(c_chan, threads=n_threads)) + precond_shift
     eig_c_inv = (1.0 / eig_c)[None, :]
 
     M_in = pyfftw.empty_aligned((K, N), dtype='complex128')
@@ -290,7 +272,7 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-9, 
 # ---------------------------------------------------------
 # NUDFT inversion — shared mesh (azu_unif == 1)
 # ---------------------------------------------------------
-def _invert_nudft(theta_j, f, reg_param=1e-12):
+def _invert_nudft(theta_j, f, reg_param=1e-20):
     theta = np.asarray(theta_j, float)
     f = np.asarray(f, dtype=np.complex128)
     N = theta.size
@@ -311,7 +293,12 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
                                   maxiter: int = 50,
                                   tol: float = 1e-8,
                                   use_nudft: bool = False,
-                                  reg_param: float = 1e-12) -> np.ndarray:
+                                  reg_param: float = 1e-12,
+                                  eps: float = 1e-12,
+                                  precond_shift: float = 1e-3,
+                                  kde_oversample: int = 4,
+                                  kde_bandwidth: float = 1.0,
+                                  **kwargs) -> np.ndarray:
     """
     theta_j : (N,)       — same mesh for all radii
     f_values: (N,) or (N, M)
@@ -324,8 +311,13 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
     if use_nudft:
         coeff_core = _invert_nudft(theta_j, f_values, reg_param=reg_param)
     else:
-        coeff_core = _invert_nufft_block_cgls_shared(theta_j, f_values,
-                                                     tol=tol, maxiter=maxiter, eps=1e-12,
-                                                     reg_param=reg_param)
+        coeff_core = _invert_nufft_block_cgls_shared(
+            theta_j, f_values,
+            tol=tol, maxiter=maxiter, eps=eps,
+            reg_param=reg_param,
+            precond_shift=precond_shift,
+            kde_oversample=kde_oversample,
+            kde_bandwidth=kde_bandwidth
+        )
 
     return _pad_coeff_to_Np1(coeff_core, N)

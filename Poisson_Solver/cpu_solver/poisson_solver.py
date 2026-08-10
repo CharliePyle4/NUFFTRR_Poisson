@@ -23,7 +23,12 @@ def poisson_solver(f_values, g_values, u_fourier_0,
                    use_nudft_angular: bool = False,
                    maxiter_nufft: int = 50,
                    tol_nufft: float = 1e-8,
-                   reg_param: float = 1e-12):
+                   reg_param: float = 1e-12,
+                   eps_finufft: float = 1e-12,
+                   precond_shift: float = 1e-3,
+                   kde_oversample: int = 4,
+                   kde_bandwidth: float = 1.0,
+                   **kwargs):
     """
     Solve Δu = f on a disk of radius R in polar coords using Fourier-in-θ
     and radial integration (C, D).
@@ -48,6 +53,10 @@ def poisson_solver(f_values, g_values, u_fourier_0,
         maxiter_nufft=maxiter_nufft,
         tol_nufft=tol_nufft,
         reg_param=reg_param,
+        eps=eps_finufft,
+        precond_shift=precond_shift,
+        kde_oversample=kde_oversample,
+        kde_bandwidth=kde_bandwidth,
     )
 
     # Step 2: radial integrals C_n and D_n
@@ -82,7 +91,7 @@ def poisson_solver(f_values, g_values, u_fourier_0,
         theta_j=theta_j,
         N=N,
         azu_unif=azu_unif,
-        eps=1e-12,
+        eps=eps_finufft,
     )
 
     return u_approx

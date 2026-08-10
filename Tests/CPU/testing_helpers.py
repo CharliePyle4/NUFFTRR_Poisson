@@ -55,6 +55,168 @@ def g_neumann(x, y):
     return u_x(x, y) * x + u_y(x, y) * y
 
 # ---------------------------------------------------------
+# Optimal Lambda & Parameter Table Resolution
+# ---------------------------------------------------------
+def compute_optimal_lambda(theta_j, N, M, is_nudft=False):
+    """
+    Pre-calculates the optimal lambda / reg_param from grid parameters (N, M, theta).
+    Balances radial quadrature discretization error O(M^-2.5) with non-uniform angular
+    Beurling-Landau frame distortion rho = max(d_theta) / (2*pi/N).
+    """
+    if theta_j is None:
+        return 1e-12
+    theta_arr = np.asarray(theta_j, dtype=float)
+    if theta_arr.size == 0:
+        return 1e-12
+    if theta_arr.ndim > 1:
+        theta_arr = theta_arr[:, 0]
+    
+    theta_sorted = np.sort(theta_arr % (2.0 * np.pi))
+    d_theta = np.diff(np.concatenate([theta_sorted, [theta_sorted[0] + 2.0 * np.pi]]))
+    avg_gap = 2.0 * np.pi / N
+    rho = np.max(d_theta) / avg_gap  # rho >= 1.0 (rho=1.0 is uniform)
+    
+    if is_nudft:
+        if rho <= 1.5:
+            return 1e-12
+        else:
+            cond = 1e-13 * (rho * N) ** 2.0
+            return float(np.clip(cond, 1e-12, 1e-6))
+    else:
+        # NUFFT: balance radial error floor O(M^-2.5) with angular frame distortion
+        base_lambda = 0.05 * (M ** -2.5)
+        
+        if rho > 1.5:
+            distortion_factor = ((rho - 1.0) ** 2.0) * (N / 32.0)
+            reg = base_lambda * (1.0 + 50.0 * distortion_factor)
+            return float(np.clip(reg, 1e-10, 1e-4))
+        else:
+            return float(np.clip(base_lambda, 1e-11, 1e-6))
+
+
+def resolve_reg_param(cfg_reg, method, N, M, iAngle=None):
+    """
+    Resolves the regularization parameter (lambda) for a specific run (N, M, method).
+    
+    Supports:
+    1. Single float / int (e.g. 1e-12)
+    2. Dict keyed by method name, label, or mesh kind:
+       e.g. {'Fixed-rand-NUFFT': 1e-8, 'sine': 1e-6}
+    3. Dict keyed by (method, N), (method, M), (method, N, M), or (N, M):
+       e.g. {('Fixed-sine-NUFFT', 128): 1e-4, (32, 32): 1e-10}
+    4. Nested dict:
+       e.g. {'Fixed-sine-NUFFT': {32: 1e-6, 64: 1e-6, 128: 1e-4}}
+    5. List / tuple / 1D array (vector matching standard resolutions [32, 64, 128, 256, 512])
+    6. pandas DataFrame (table where index is N or M and columns are methods)
+    7. Callable function: fn(N, M, method)
+    8. Method-level override: method.get('reg_param')
+    """
+    # 1. Check method-level override if specified directly in method dictionary
+    if "reg_param" in method and method["reg_param"] is not None:
+        cfg = method["reg_param"]
+    elif "lambda" in method and method["lambda"] is not None:
+        cfg = method["lambda"]
+    else:
+        cfg = cfg_reg
+
+    if cfg is None:
+        return 1e-12
+
+    # If callable
+    if callable(cfg):
+        return float(cfg(N, M, method))
+
+    # If simple float / int
+    if isinstance(cfg, (int, float, np.floating, np.integer)):
+        return float(cfg)
+
+    m_name = method.get("name", "")
+    m_label = method.get("label", "")
+    m_kind = method.get("mesh_kind", "")
+    is_nudft = method.get("use_nudft", False)
+
+    # If string 'auto' or 'optimal'
+    if isinstance(cfg, str):
+        if cfg.lower() in ("auto", "optimal"):
+            return compute_optimal_lambda(iAngle, N, M, is_nudft=is_nudft)
+        try:
+            return float(cfg)
+        except ValueError:
+            return 1e-12
+
+    # If pandas DataFrame
+    if isinstance(cfg, pd.DataFrame):
+        for col_key in (m_name, m_label, m_kind):
+            if col_key in cfg.columns:
+                if N in cfg.index:
+                    return float(cfg.loc[N, col_key])
+                elif M in cfg.index:
+                    return float(cfg.loc[M, col_key])
+                elif (N, M) in cfg.index:
+                    return float(cfg.loc[(N, M), col_key])
+
+    # If dictionary
+    if isinstance(cfg, dict):
+        # Check specific tuple keys first: (name, N, M), (name, N), (name, M), (N, M)
+        for key in [
+            (m_name, N, M), (m_label, N, M), (m_kind, N, M),
+            (m_name, N), (m_label, N), (m_kind, N),
+            (m_name, M), (m_label, M), (m_kind, M),
+            (N, M), N, M
+        ]:
+            if key in cfg:
+                val = cfg[key]
+                if isinstance(val, (int, float, np.floating, np.integer)):
+                    return float(val)
+                elif isinstance(val, dict):
+                    if N in val: return float(val[N])
+                    if M in val: return float(val[M])
+
+        # Check method name / label / kind keys
+        for key in (m_name, m_label, m_kind):
+            if key in cfg:
+                val = cfg[key]
+                if isinstance(val, (int, float, np.floating, np.integer)):
+                    return float(val)
+                elif isinstance(val, dict):
+                    # 1. Exact (N, M) pair
+                    if (N, M) in val:
+                        return float(val[(N, M)])
+                    # 2. Both "N" and "M" subdictionaries are provided
+                    if "N" in val and "M" in val:
+                        if N != 32 and M == 32 and N in val["N"]:
+                            return float(val["N"][N])
+                        elif M != 32 and N == 32 and M in val["M"]:
+                            return float(val["M"][M])
+                        elif N in val["N"]:
+                            return float(val["N"][N])
+                        elif M in val["M"]:
+                            return float(val["M"][M])
+                    # 3. Explicit "N" subdict
+                    elif "N" in val and N in val["N"]:
+                        return float(val["N"][N])
+                    # 4. Explicit "M" subdict
+                    elif "M" in val and M in val["M"]:
+                        return float(val["M"][M])
+                    # 5. Flat dictionary keyed by integers (e.g. {32: ..., 64: ...})
+                    elif N in val:
+                        return float(val[N])
+                    elif M in val:
+                        return float(val[M])
+                elif isinstance(val, (list, tuple, np.ndarray)):
+                    res_list = [32, 64, 128, 256, 512]
+                    if N in res_list and len(val) == len(res_list):
+                        return float(val[res_list.index(N)])
+                    elif M in res_list and len(val) == len(res_list):
+                        return float(val[res_list.index(M)])
+
+        # Check default key in dict
+        if "default" in cfg:
+            return float(cfg["default"])
+
+    return 1e-12
+
+# ---------------------------------------------------------
 # Global Config
 # ---------------------------------------------------------
 GLOBAL_CONFIG = {
@@ -62,7 +224,11 @@ GLOBAL_CONFIG = {
     'rad_unif': 1,
     'tol_nufft': 1e-10,
     'maxiter_nufft': 200,
-    'reg_param': 1e-12,
+    'reg_param': 'auto',
+    'eps_finufft': 1e-12,
+    'precond_shift': 1e-3,
+    'kde_oversample': 4,
+    'kde_bandwidth': 1.0,
     'quad_rule': 1,
     'BC_choice': 1,
     'problem_type': 0,
@@ -109,7 +275,7 @@ def get_angle_mesh(method, N, M):
 # ---------------------------------------------------------
 # Core Single Test Execution
 # ---------------------------------------------------------
-def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
+def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None, **kwargs):
     iRadius = generate_uniform_radial(M, R)
     iAngle = get_angle_mesh(method, N, M)
 
@@ -132,6 +298,9 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
     else:
         u_fourier_0 = np.array([])
 
+    cfg_reg = reg_param if reg_param is not None else GLOBAL_CONFIG.get('reg_param', 'auto')
+    actual_reg = resolve_reg_param(cfg_reg, method, N, M, iAngle)
+
     t0 = time.perf_counter()
     with warnings.catch_warnings():
         if mute:
@@ -147,7 +316,11 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
                 use_nudft_angular=nudft_flag,
                 maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
                 tol_nufft=GLOBAL_CONFIG['tol_nufft'],
-                reg_param=GLOBAL_CONFIG['reg_param']
+                reg_param=actual_reg,
+                eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
+                precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
+                kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
+                kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
             )
             runtime = time.perf_counter() - t0
 
@@ -167,7 +340,7 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
 # ---------------------------------------------------------
 # Table Generation Pipelines
 # ---------------------------------------------------------
-def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_Table1", mute=False):
+def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_Table1", mute=False, reg_param=None, **kwargs):
     results = []
     method_pbar = tqdm(methods, desc=f"Pipeline ({test_type})", disable=False)
     for method in method_pbar:
@@ -179,7 +352,7 @@ def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_T
             pairs = [(N, M) for N in N_values for M in M_values]
             sub_pbar = tqdm(pairs, desc=f"  {method['label']}", leave=False, disable=False)
             for N, M in sub_pbar:
-                res = run_case(N, M, method, bc_choice=1, quad_rule=1, mute=mute)
+                res = run_case(N, M, method, bc_choice=1, quad_rule=1, mute=mute, reg_param=reg_param, **kwargs)
                 results.append(res)
                 if not mute:
                     print(f"  N={N:4d}, M={M:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
@@ -187,7 +360,7 @@ def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_T
             tasks = [(M, quad, bc) for M in M_values for quad in [1, 2] for bc in [1, 2]]
             sub_pbar = tqdm(tasks, desc=f"  {method['label']}", leave=False, disable=False)
             for M, quad, bc in sub_pbar:
-                res = run_case(fixed_other, M, method, bc_choice=bc, quad_rule=quad, mute=mute)
+                res = run_case(fixed_other, M, method, bc_choice=bc, quad_rule=quad, mute=mute, reg_param=reg_param, **kwargs)
                 results.append(res)
                 q_str = "Trapezoidal" if quad == 1 else "Simpson"
                 bc_str = "Dirichlet" if bc == 1 else "Neumann"
@@ -196,14 +369,14 @@ def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_T
         elif test_type == "Accuracy_VaryN":
             sub_pbar = tqdm(N_values, desc=f"  {method['label']}", leave=False, disable=False)
             for N in sub_pbar:
-                res = run_case(N, fixed_other, method, bc_choice=1, quad_rule=1, mute=mute)
+                res = run_case(N, fixed_other, method, bc_choice=1, quad_rule=1, mute=mute, reg_param=reg_param, **kwargs)
                 results.append(res)
                 if not mute:
                     print(f"  N={N:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
         elif test_type == "Accuracy_VaryM":
             sub_pbar = tqdm(M_values, desc=f"  {method['label']}", leave=False, disable=False)
             for M in sub_pbar:
-                res = run_case(fixed_other, M, method, bc_choice=1, quad_rule=1, mute=mute)
+                res = run_case(fixed_other, M, method, bc_choice=1, quad_rule=1, mute=mute, reg_param=reg_param, **kwargs)
                 results.append(res)
                 if not mute:
                     print(f"  M={M:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
@@ -239,14 +412,24 @@ def render_pivot(df, index_col, columns_col, value_col, title):
     for c in cols:
         if c not in sorted_cols:
             sorted_cols.append(c)
-            
+
     pivot = pivot[sorted_cols]
 
     def fmt(x):
         if pd.isna(x): return "—"
         return f"{x:.2e}" if ("L2" in value_col or (isinstance(x, (float, np.float64)) and x < 1e-3)) else f"{x:.4f}"
-        
-    display(HTML(pivot.map(fmt).to_html()))
+
+    formatted_table = pivot.map(fmt)
+    
+    # Check if we are inside a Jupyter notebook environment
+    try:
+        from IPython import get_ipython
+        if get_ipython() is not None and 'IPKernelApp' in get_ipython().config:
+            display(HTML(formatted_table.to_html()))
+        else:
+            print(formatted_table.to_string())
+    except Exception:
+        print(formatted_table.to_string())
 
 
 def render_accuracy(df, index_col, columns_col, title_prefix):
@@ -656,6 +839,8 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False):
     else:
         u_fourier_0 = np.array([])
 
+    actual_reg = resolve_reg_param(GLOBAL_CONFIG.get('reg_param', 'auto'), method, N, M, iAngle)
+
     t0 = time.perf_counter()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -669,7 +854,11 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False):
                 use_nudft_angular=nudft_flag,
                 maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
                 tol_nufft=GLOBAL_CONFIG['tol_nufft'],
-                reg_param=GLOBAL_CONFIG['reg_param']
+                reg_param=actual_reg,
+                eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
+                precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
+                kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
+                kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
             )
             runtime = time.perf_counter() - t0
             _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)
