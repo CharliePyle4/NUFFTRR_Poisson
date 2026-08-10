@@ -119,6 +119,7 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
             raise ValueError("theta_j must be 1D of length N when azu_unif == 1")
         x        = np.ascontiguousarray(_wrap_angles(theta))
         coeff    = u_fourier_coeff[:N, :].copy()
+        coeff[0, :] += u_fourier_coeff[N, :]  # Recombine the split Nyquist mode (k = -N/2 and +N/2)
         coeff_KN = np.ascontiguousarray(coeff.T, dtype=np.complex128)  # (M, N)
         out_KM   = finufft.nufft1d2(x, coeff_KN, isign=+1, eps=eps)   # (M, N)
         return out_KM.T                                                # (N, M)
