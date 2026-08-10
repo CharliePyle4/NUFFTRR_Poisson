@@ -70,9 +70,6 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
             use_nudft=use_nudft_angular,
             reg_param=reg_param,
             eps=eps,
-            precond_shift=precond_shift,
-            kde_oversample=kde_oversample,
-            kde_bandwidth=kde_bandwidth,
         )
 
         f_fc = combined_fc[:, :M_f]

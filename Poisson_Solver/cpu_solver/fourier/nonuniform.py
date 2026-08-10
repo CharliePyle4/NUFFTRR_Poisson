@@ -136,10 +136,43 @@ def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
 # Direct Unsquared CGLS (Paige & Saunders) — Strategy 2 (Avoids Normal Equations)
 # Solves min ||A c - f||_2 directly without squaring condition numbers.
 # =============================================================================
-def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-15, **kwargs):
+def _compute_pipe_menon_weights(theta: np.ndarray, n_iter: int = 2, eps: float = 1e-12) -> np.ndarray:
+    """
+    Pipe & Menon (1999) Iterative Sampling Density Compensation.
+    Computes mathematically optimal weights W via fixed-point sinc iteration:
+    w_{k+1} = w_k / (A A^H w_k).
+    """
+    x = _wrap_angles(theta)
+    N = theta.size
+
+    # Initialize with normalized Voronoi trapezoidal weights
+    theta_ext = np.concatenate([[theta[-1] - 2.0*np.pi], theta, [theta[0] + 2.0*np.pi]])
+    w = 0.5 * (theta_ext[2:] - theta_ext[:-2]) / (2.0 * np.pi)
+
+    # Fast 1D single-transform Guru plans for setup
+    p1 = finufft.Plan(1, (N,), n_trans=1, isign=-1, eps=eps, nthreads=4)
+    p1.setpts(x)
+    p2 = finufft.Plan(2, (N,), n_trans=1, isign=+1, eps=eps, nthreads=4)
+    p2.setpts(x)
+
+    c = np.empty((1, N), dtype=np.complex128)
+    d = np.empty((1, N), dtype=np.complex128)
+    w_arr = w.astype(np.complex128)[None, :]
+
+    for _ in range(n_iter):
+        p1.execute(w_arr, c)
+        p2.execute(c, d)
+        density = np.maximum(np.real(d[0, :]), 1e-12)
+        w_arr[0, :] = w_arr[0, :] / density
+        w_arr[0, :] = w_arr[0, :] / np.sum(w_arr[0, :].real)
+
+    return w_arr.real[0, :]
+
+
+def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-12, **kwargs):
     """
     High-Performance Preconditioned Conjugate Gradient for Least Squares (PCGLS).
-    Uses persistent FINUFFT Guru Plans and Voronoi spatial quadrature weights.
+    Uses persistent FINUFFT Guru Plans and Pipe & Menon optimal spatial weights.
     """
     theta = np.asarray(theta_j, dtype=float)
     x = _wrap_angles(theta)
@@ -156,9 +189,8 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
     c_T = np.zeros((K, N), dtype=np.complex128)
     r_T = f_T.copy()  # Spatial residual r = f - A c
 
-    # Voronoi / trapezoidal quadrature density weights
-    theta_ext = np.concatenate([[theta[-1] - 2.0*np.pi], theta, [theta[0] + 2.0*np.pi]])
-    w = (0.5 * (theta_ext[2:] - theta_ext[:-2]) / (2.0 * np.pi))[None, :]  # (1, N)
+    # Compute optimal Pipe & Menon weights
+    w = _compute_pipe_menon_weights(theta, n_iter=2, eps=1e-12)[None, :]  # (1, N)
 
     # Initialize FINUFFT Guru Plans once outside the CGLS loop
     n_threads = min(os.cpu_count() or 4, 8)
@@ -362,14 +394,11 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
                                   tol: float = 1e-10,
                                   use_nudft: bool = False,
                                   reg_param: float = 1e-12,
-                                  eps: float = 1e-15,
-                                  precond_shift: float = 1e-3,
-                                  kde_oversample: int = 4,
-                                  kde_bandwidth: float = 1.0,
+                                  eps: float = 1e-12,
                                   **kwargs) -> np.ndarray:
     """
-    theta_j : (N,)       — same mesh for all radii
-    f_values: (N,) or (N, M)
+    Computes azimuthal Fourier coefficients on non-uniform angular mesh theta_j.
+    Uses Pipe & Menon Unsquared PCGLS for NUFFT or regularized least-squares for NUDFT.
     """
     f_values = np.asarray(f_values)
     N = f_values.shape[0]
@@ -383,9 +412,6 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
             theta_j, f_values,
             tol=tol, maxiter=maxiter, eps=eps,
             reg_param=reg_param,
-            precond_shift=precond_shift,
-            kde_oversample=kde_oversample,
-            kde_bandwidth=kde_bandwidth,
             **kwargs
         )
 

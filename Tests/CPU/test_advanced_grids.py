@@ -48,7 +48,7 @@ CUSTOM_PROBLEM = None
 # Tolerances & Precision
 TOL_NUFFT = 1e-10           # Block CG residual tolerance
 MAXITER_NUFFT = 200         # Max CG iterations
-EPS_FINUFFT = 1e-15         # 15-digit double-precision
+EPS_FINUFFT = 1e-12         # 15-digit double-precision
 PRECOND_SHIFT = 1e-8        # Regularization shift for circulant preconditioner
 KDE_OVERSAMPLE = 4          # 4x fine grid FFT-KDE oversampling
 KDE_BANDWIDTH = 1.0         # Gaussian bandwidth multiplier sigma = 2*pi/N

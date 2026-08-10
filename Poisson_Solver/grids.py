@@ -235,20 +235,16 @@ def generate_warped_azimuthal(N, eps1=0.08, eps2=-0.04):
     return theta
 
 
-def generate_chebyshev_angular_azimuthal(N):
+def generate_chebyshev_angular_azimuthal(N, alpha=0.18):
     """
-    Chebyshev angular grid mapped to periodic circle [0, 2π).
-    Suppresses Gibbs ringing near domain interfaces.
+    Smooth conformal Chebyshev angular grid on periodic circle [0, 2π).
+    Clusters points near interfaces (0, π, 2π) while preserving bounded Jacobian.
     """
     j = np.arange(N)
-    # Piecewise Chebyshev mapping
-    half_N = N // 2
-    theta_half = np.pi * 0.5 * (1.0 - np.cos(np.pi * np.arange(half_N) / half_N))
-    theta = np.concatenate([theta_half, np.pi + theta_half])
-    if len(theta) < N:
-        theta = np.append(theta, 2.0 * np.pi - 1e-6)
+    xi = 2.0 * np.pi * (j + 0.5) / N
+    theta = xi - alpha * np.sin(2.0 * xi)
     theta = np.mod(theta, 2.0 * np.pi)
-    theta = np.sort(theta[:N])
+    theta = np.sort(theta)
     return theta
 
 
