@@ -53,8 +53,17 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
                 "matching the first dimension of f_values"
             )
 
-        f_fc = compute_fourier_coeff_nonunif(
-            f_values,
+        # Unified Batching of [f, g] into a single NUFFT/NUDFT solve
+        is_f_1d = (f_values.ndim == 1)
+        is_g_1d = (g_values.ndim == 1)
+        f_arr = f_values[:, None] if is_f_1d else f_values
+        g_arr = g_values[:, None] if is_g_1d else g_values
+
+        M_f = f_arr.shape[1]
+        combined = np.ascontiguousarray(np.hstack([f_arr, g_arr]))
+
+        combined_fc = compute_fourier_coeff_nonunif(
+            combined,
             theta,
             maxiter=maxiter_nufft,
             tol=tol_nufft,
@@ -65,19 +74,11 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
             kde_oversample=kde_oversample,
             kde_bandwidth=kde_bandwidth,
         )
-        g_fc = compute_fourier_coeff_nonunif(
-            g_values,
-            theta,
-            maxiter=maxiter_nufft,
-            tol=tol_nufft,
-            use_nudft=use_nudft_angular,
-            reg_param=reg_param,
-            eps=eps,
-            precond_shift=precond_shift,
-            kde_oversample=kde_oversample,
-            kde_bandwidth=kde_bandwidth,
-        )
-        return f_fc, g_fc
+
+        f_fc = combined_fc[:, :M_f]
+        g_fc = combined_fc[:, M_f:]
+
+        return (f_fc[:, 0] if is_f_1d else f_fc), (g_fc[:, 0] if is_g_1d else g_fc)
 
     else:
         raise ValueError(
