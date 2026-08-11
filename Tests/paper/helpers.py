@@ -29,64 +29,67 @@ from Poisson_Solver.poisson_solver import poisson_solver
 # ---------------------------------------------------------
 # Exact Analytical Benchmark with Localized Azimuthal Peak
 # ---------------------------------------------------------
-def get_azimuthal_benchmark_problem(R=1.0, epsilon=0.05):
+def get_azimuthal_gaussian_ridge_problem(R=1.0, theta_0=np.pi, sigma=0.05):
     """
-    Chebyshev Problem 1: Angular boundary layer on the disk B(0,R).
-
-        u(r, theta) = r^2 * (R^2 - r^2) * H(theta),
-        H(theta) = tanh(theta / epsilon),  epsilon << 1
-
-    Properties:
-    - Homogeneous Dirichlet boundary condition: u(R, theta) = 0.
-    - Smooth at origin: u(0, theta) = 0.
-    - Thin angular boundary layer of width O(epsilon) near theta = 0.
-    - Exact Laplacian (same radial factor as the wave-packet case):
-
-        Δu = (4*R^2 - 16*r^2) * H(theta) + (R^2 - r^2) * H''(theta)
-
-      where H'' is the second derivative of tanh(theta/epsilon).
+    Creates a problem with a sharp Gaussian ridge clustered around a specific angle theta_0.
+    The function is strictly smooth and 2pi-periodic.
+    
+    u(r, theta) = r^2 * (R^2 - r^2) * exp( - (sin((theta - theta_0)/2) / sigma)**2 )
     """
-    th_sym = sp.symbols('th', real=True)
-
-    # Angular profile and its second derivative
-    H_sym = sp.tanh(th_sym / epsilon)
-    H_d2_sym = sp.diff(H_sym, th_sym, 2)
-
-    H_func = sp.lambdify(th_sym, H_sym, "numpy")
-    H_d2_func = sp.lambdify(th_sym, H_d2_sym, "numpy")
+    r_sym, th_sym = sp.symbols('r th', real=True)
+    
+    # 2pi-periodic localized Gaussian-like peak at theta = theta_0
+    # We use sin((th - th_0)/2) to ensure strict periodicity and smoothness
+    angular_peak = sp.exp(- (sp.sin((th_sym - theta_0) / 2.0) / sigma)**2)
+    
+    # Define the exact 2D solution
+    u_sym = r_sym**2 * (R**2 - r_sym**2) * angular_peak
+    
+    # Compute symbolic Laplacian in polar coordinates
+    # \Delta u = u_rr + (1/r)u_r + (1/r^2)u_{theta, theta}
+    u_r = sp.diff(u_sym, r_sym)
+    u_rr = sp.diff(u_r, r_sym)
+    u_th = sp.diff(u_sym, th_sym)
+    u_thth = sp.diff(u_th, th_sym)
+    
+    lap_sym = u_rr + (u_r / r_sym) + (u_thth / r_sym**2)
+    
+    # Lambdify for fast numerical evaluation
+    u_func = sp.lambdify((r_sym, th_sym), u_sym, "numpy")
+    lap_func = sp.lambdify((r_sym, th_sym), lap_sym, "numpy")
 
     def u_true(xc, yc):
-        rc = np.sqrt(xc**2 + yc**2)
-        thc = np.arctan2(yc, xc)
-        return rc**2 * (R**2 - rc**2) * H_func(thc)
+        r = np.sqrt(xc**2 + yc**2)
+        th = np.arctan2(yc, xc)
+        return u_func(r, th)
 
     def f_rhs(xc, yc):
-        rc = np.sqrt(xc**2 + yc**2)
-        thc = np.arctan2(yc, xc)
-        # Radial part (same derivation as in your original code)
-        return (4.0 * R**2 - 16.0 * rc**2) * H_func(thc) + (R**2 - rc**2) * H_d2_func(thc)
+        r = np.sqrt(xc**2 + yc**2)
+        # Avoid division by zero at origin (the r^2 term cancels the 1/r^2 in the Laplacian)
+        # For evaluation, a tiny offset at the origin is safe because it goes to 0 anyway.
+        r = np.maximum(r, 1e-14) 
+        th = np.arctan2(yc, xc)
+        return lap_func(r, th)
 
     def g_dirichlet(xc, yc):
-        # For Dirichlet, we just use the exact solution on the boundary.
-        return u_true(xc, yc)
-
+        return np.zeros_like(xc)
+        
     def g_neumann(xc, yc, R_val=R):
-        # Radial derivative of u at r = R:
-        # u(r,theta) = r^2(R^2-r^2)H(theta) => ∂u/∂r|_{r=R} = -2 R^3 H(theta)
-        rc = np.sqrt(xc**2 + yc**2)
+        # Radial derivative at r=R for u(r,theta) = r^2(R^2-r^2)*Peak
+        # is -2 * R^3 * Peak
         thc = np.arctan2(yc, xc)
-        return -2.0 * (R_val**3) * H_func(thc)
+        peak = np.exp(- (np.sin((thc - theta_0) / 2.0) / sigma)**2)
+        return -2.0 * (R_val**3) * peak
 
     return {
         "u": u_true,
         "f": f_rhs,
         "g_dirichlet": g_dirichlet,
-        "g_neumann": g_neumann,
-        "H_func": H_func,
+        "g_neumann": g_neumann,   # <--- Added this line
         "R": R,
-        "epsilon": epsilon,
+        "sigma": sigma,
+        "theta_0": theta_0
     }
-
 # ---------------------------------------------------------
 # Smooth Adapted Clustered Azimuthal Grid Generator
 # ---------------------------------------------------------
@@ -139,11 +142,15 @@ def run_benchmark_case(N, M, azu_unif, theta_j, problem,
     else:
         g_values = g_neu(x_coord[:, M - 1], y_coord[:, M - 1], R)
 
-    if bc_choice == 2:
+    # --- FIX: Constrain the zero-mode for Non-Uniform azimuthal grids ---
+    # Non-uniform angular mappings can alias the global integral, causing a constant shift in the solution.
+    # We must explicitly pin the m=0 mode at the boundary to prevent this.
+    if bc_choice == 2 or azu_unif == 1:
         u_fourier_0_arr = compute_zero_mode(u_t, iAngle, azu_unif)
         u_fourier_0 = u_fourier_0_arr[-1]
     else:
         u_fourier_0 = np.array([])
+    # --------------------------------------------------------------------
 
     t0 = time.perf_counter()
     with warnings.catch_warnings():
