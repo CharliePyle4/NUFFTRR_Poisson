@@ -1153,3 +1153,74 @@ def plot_bc_quad_comparison_vs_M(df_bq, N_fixed, methods=None):
         ax.legend(fontsize=7)
     plt.tight_layout()
     plt.show()
+
+
+
+
+def plot_runtime_table1_extremes(df, title_prefix="Table 1 (extreme N,M)"):
+    """
+    2x2 runtime plot using only the lowest and highest N and M:
+      Top-left:  runtime vs M for N = N_min
+      Top-right: runtime vs M for N = N_max
+      Bottom-left:  runtime vs N for M = M_min
+      Bottom-right: runtime vs N for M = M_max
+    All solver labels are plotted in each relevant panel.
+    """
+    N_vals = sorted(df["N"].unique())
+    M_vals = sorted(df["M"].unique())
+    if len(N_vals) < 2 or len(M_vals) < 2:
+        print("Need at least two distinct N and M values for extremes plot.")
+        return
+
+    N_lo, N_hi = N_vals[0], N_vals[-1]
+    M_lo, M_hi = M_vals[0], M_vals[-1]
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharey="row")
+    fig.suptitle(title_prefix)
+
+    # Top-left: runtime vs M for N = N_lo
+    ax = axes[0, 0]
+    df_sub = df[df["N"] == N_lo]
+    for label, group in df_sub.groupby("label"):
+        group = group.sort_values("M")
+        ax.loglog(group["M"], group["runtime"], marker="o", label=label)
+    ax.set_xlabel("Radial Grid Points (M)")
+    ax.set_ylabel("Runtime (seconds)")
+    ax.set_title(f"N = {N_lo} — Runtime vs M")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+    ax.legend(fontsize=8)
+
+    # Top-right: runtime vs M for N = N_hi
+    ax = axes[0, 1]
+    df_sub = df[df["N"] == N_hi]
+    for label, group in df_sub.groupby("label"):
+        group = group.sort_values("M")
+        ax.loglog(group["M"], group["runtime"], marker="o", label=label)
+    ax.set_xlabel("Radial Grid Points (M)")
+    ax.set_title(f"N = {N_hi} — Runtime vs M")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    # Bottom-left: runtime vs N for M = M_lo
+    ax = axes[1, 0]
+    df_sub = df[df["M"] == M_lo]
+    for label, group in df_sub.groupby("label"):
+        group = group.sort_values("N")
+        ax.loglog(group["N"], group["runtime"], marker="s", label=label)
+    ax.set_xlabel("Angular Grid Points (N)")
+    ax.set_ylabel("Runtime (seconds)")
+    ax.set_title(f"M = {M_lo} — Runtime vs N")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+    ax.legend(fontsize=8)
+
+    # Bottom-right: runtime vs N for M = M_hi
+    ax = axes[1, 1]
+    df_sub = df[df["M"] == M_hi]
+    for label, group in df_sub.groupby("label"):
+        group = group.sort_values("N")
+        ax.loglog(group["N"], group["runtime"], marker="s", label=label)
+    ax.set_xlabel("Angular Grid Points (N)")
+    ax.set_title(f"M = {M_hi} — Runtime vs N")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
