@@ -29,57 +29,63 @@ from Poisson_Solver.poisson_solver import poisson_solver
 # ---------------------------------------------------------
 # Exact Analytical Benchmark with Localized Azimuthal Peak
 # ---------------------------------------------------------
-def get_azimuthal_benchmark_problem(R=1.0, theta_0=np.pi, k_mode=4, gamma=0.65):
+def get_azimuthal_benchmark_problem(R=1.0, epsilon=0.05):
     """
-    Constructs an exact analytical Poisson problem on the disk B(0, R):
+    Chebyshev Problem 1: Angular boundary layer on the disk B(0,R).
 
-        u(r, theta) = r^2 * (R^2 - r^2) * h(theta)
-        h(theta) = cos(k * theta) / (1 - gamma * cos(theta - theta_0))
+        u(r, theta) = r^2 * (R^2 - r^2) * H(theta),
+        H(theta) = tanh(theta / epsilon),  epsilon << 1
 
-    This solution features:
+    Properties:
     - Homogeneous Dirichlet boundary condition: u(R, theta) = 0.
-    - Smooth behavior at origin r -> 0: u(0, theta) = 0.
-    - Localized high-frequency angular front around theta = theta_0.
-    - Exact Laplacian:
-        Δu = (4*R^2 - 16*r^2) * h(theta) + (R^2 - r^2) * h''(theta)
+    - Smooth at origin: u(0, theta) = 0.
+    - Thin angular boundary layer of width O(epsilon) near theta = 0.
+    - Exact Laplacian (same radial factor as the wave-packet case):
+
+        Δu = (4*R^2 - 16*r^2) * H(theta) + (R^2 - r^2) * H''(theta)
+
+      where H'' is the second derivative of tanh(theta/epsilon).
     """
     th_sym = sp.symbols('th', real=True)
-    h_sym = sp.cos(k_mode * th_sym) / (1 - gamma * sp.cos(th_sym - theta_0))
-    h_d2_sym = sp.diff(h_sym, th_sym, 2)
 
-    h_func = sp.lambdify(th_sym, h_sym, "numpy")
-    h_d2_func = sp.lambdify(th_sym, h_d2_sym, "numpy")
+    # Angular profile and its second derivative
+    H_sym = sp.tanh(th_sym / epsilon)
+    H_d2_sym = sp.diff(H_sym, th_sym, 2)
+
+    H_func = sp.lambdify(th_sym, H_sym, "numpy")
+    H_d2_func = sp.lambdify(th_sym, H_d2_sym, "numpy")
 
     def u_true(xc, yc):
         rc = np.sqrt(xc**2 + yc**2)
         thc = np.arctan2(yc, xc)
-        return rc**2 * (R**2 - rc**2) * h_func(thc)
+        return rc**2 * (R**2 - rc**2) * H_func(thc)
 
     def f_rhs(xc, yc):
         rc = np.sqrt(xc**2 + yc**2)
         thc = np.arctan2(yc, xc)
-        return (4.0 * R**2 - 16.0 * rc**2) * h_func(thc) + (R**2 - rc**2) * h_d2_func(thc)
+        # Radial part (same derivation as in your original code)
+        return (4.0 * R**2 - 16.0 * rc**2) * H_func(thc) + (R**2 - rc**2) * H_d2_func(thc)
 
     def g_dirichlet(xc, yc):
+        # For Dirichlet, we just use the exact solution on the boundary.
         return u_true(xc, yc)
 
     def g_neumann(xc, yc, R_val=R):
+        # Radial derivative of u at r = R:
+        # u(r,theta) = r^2(R^2-r^2)H(theta) => ∂u/∂r|_{r=R} = -2 R^3 H(theta)
         rc = np.sqrt(xc**2 + yc**2)
         thc = np.arctan2(yc, xc)
-        return -2.0 * (R_val**3) * h_func(thc)
+        return -2.0 * (R_val**3) * H_func(thc)
 
     return {
         "u": u_true,
         "f": f_rhs,
         "g_dirichlet": g_dirichlet,
         "g_neumann": g_neumann,
-        "h_func": h_func,
+        "H_func": H_func,
         "R": R,
-        "theta_0": theta_0,
-        "k_mode": k_mode,
-        "gamma": gamma
+        "epsilon": epsilon,
     }
-
 
 # ---------------------------------------------------------
 # Smooth Adapted Clustered Azimuthal Grid Generator
@@ -153,11 +159,12 @@ def run_benchmark_case(N, M, azu_unif, theta_j, problem,
             R=R,
             quad_rule=quad_rule,
             BC_choice=bc_choice,
-            rad_unif=1,               # Radial grid is always uniform
+            rad_unif=1,               # radial grid is always uniform here
             azu_unif=azu_unif,
+            grid_type=(1 if azu_unif == 2 else 3),
             use_nudft_angular=use_nudft,
             maxiter_nufft=maxiter_nufft,
-            tol_nufft=tol_nufft
+            tol_nufft=tol_nufft,
         )
     runtime = time.perf_counter() - t0
 
@@ -224,33 +231,7 @@ def run_all_algorithms_NxM_study(problem, N_values, M_values,
     return pd.DataFrame(results)
 
 
-# ---------------------------------------------------------
-# Table Rendering Utilities (N vs M Tables for Each Algorithm)
-# ---------------------------------------------------------
-def render_algorithm_tables(df_results, value_col="L2_rel", format_sci=True):
-    """
-    Renders clean N vs M HTML tables for each algorithm.
-    Rows: N (Angular points), Columns: M (Radial points).
-    """
-    methods = ["Adapted NUFFT", "Adapted NUDFT", "Uniform FFT"]
-    tables = {}
 
-    for meth in methods:
-        sub_df = df_results[df_results["method"] == meth]
-        if sub_df.empty:
-            continue
-        pivot = sub_df.pivot(index="N", columns="M", values=value_col)
-        if format_sci:
-            formatted = pivot.map(lambda v: f"{v:.2e}")
-        else:
-            formatted = pivot.map(lambda v: f"{v:.4f}")
-
-        col_title = "Relative L₂ Error" if value_col == "L2_rel" else ("Relative L_∞ Error" if value_col == "Linf_rel" else "Runtime (s)")
-        print(f"\n{'='*75}\n{meth} — {col_title} (N vs M)\n{'='*75}")
-        display(HTML(formatted.to_html(classes="table table-bordered table-striped text-center")))
-        tables[meth] = pivot
-
-    return tables
 
 
 # ---------------------------------------------------------
@@ -274,7 +255,7 @@ def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=32,
     Xf, Yf = generate_cartesian_grid_on_disk(th_fine, r_fine)
     Zf = problem["u"](Xf, Yf)
 
-    fig = plt.figure(figsize=(18, 5))
+    fig = plt.figure(figsize=(11, 3.5))
 
     # Subplot 1: 3D True Solution Surface
     ax1 = fig.add_subplot(1, 3, 1, projection='3d')
@@ -322,8 +303,8 @@ def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=32,
 
     ax3.scatter(theta_unif, u_nodes_un, color='royalblue', s=35, zorder=3, label=f"Uniform Nodes (N={N_unif})")
     ax3.scatter(theta_adapt, u_nodes_ad, color='crimson', s=45, marker='^', zorder=4, label=f"Adapted Nodes (N={N_adapt})")
-    ax3.set_xlabel(r"Azimuthal Angle $\theta$ (rad)", fontsize=11)
-    ax3.set_ylabel(r"$u(0.7R, \theta)$", fontsize=11)
+    ax3.set_xlabel(r"Azimuthal Angle $\theta$ (rad)", fontsize=8)
+    ax3.set_ylabel(r"$u(0.7R, \theta)$", fontsize=8)
     ax3.set_title("Node Density over Sharp Angular Wave", fontsize=12)
     ax3.grid(True, linestyle="--", alpha=0.5)
     ax3.legend(fontsize=9)
@@ -331,59 +312,6 @@ def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=32,
     plt.tight_layout()
     plt.show()
 
-
-def plot_accuracy_and_runtimes_from_df(df_results, fixed_M=64, fixed_N=64):
-    """
-    Plots:
-    1. L2 Error vs. N (fixed M) for all 3 methods.
-    2. L2 Error vs. M (fixed N) for all 3 methods.
-    3. Solver Runtime vs. N for all 3 methods.
-    """
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5))
-
-    colors = {"Adapted NUFFT": "crimson", "Adapted NUDFT": "forestgreen", "Uniform FFT": "royalblue"}
-    markers = {"Adapted NUFFT": "s--", "Adapted NUDFT": "^-.", "Uniform FFT": "o-"}
-
-    # Subplot 1: Error vs N (fixed M)
-    sub_M = df_results[df_results["M"] == fixed_M]
-    for meth, grp in sub_M.groupby("method"):
-        grp_s = grp.sort_values("N")
-        ax1.loglog(grp_s["N"], grp_s["L2_rel"], markers.get(meth, "o-"),
-                   color=colors.get(meth, "black"), lw=2.2, ms=6, label=meth)
-
-    ax1.set_xlabel("Angular Points $N$", fontsize=11)
-    ax1.set_ylabel(r"Relative $L_2$ Error", fontsize=11)
-    ax1.set_title(f"Accuracy vs. $N$ (Fixed $M={fixed_M}$)", fontsize=12)
-    ax1.grid(True, which="both", linestyle="--", alpha=0.5)
-    ax1.legend(fontsize=9)
-
-    # Subplot 2: Error vs M (fixed N)
-    sub_N = df_results[df_results["N"] == fixed_N]
-    for meth, grp in sub_N.groupby("method"):
-        grp_s = grp.sort_values("M")
-        ax2.loglog(grp_s["M"], grp_s["L2_rel"], markers.get(meth, "o-"),
-                   color=colors.get(meth, "black"), lw=2.2, ms=6, label=meth)
-
-    ax2.set_xlabel("Radial Points $M$", fontsize=11)
-    ax2.set_ylabel(r"Relative $L_2$ Error", fontsize=11)
-    ax2.set_title(f"Accuracy vs. $M$ (Fixed $N={fixed_N}$)", fontsize=12)
-    ax2.grid(True, which="both", linestyle="--", alpha=0.5)
-    ax2.legend(fontsize=9)
-
-    # Subplot 3: Runtime vs N
-    for meth, grp in sub_M.groupby("method"):
-        grp_s = grp.sort_values("N")
-        ax3.loglog(grp_s["N"], grp_s["runtime"], markers.get(meth, "o-"),
-                   color=colors.get(meth, "black"), lw=2.2, ms=6, label=meth)
-
-    ax3.set_xlabel("Angular Points $N$", fontsize=11)
-    ax3.set_ylabel("Runtime (seconds)", fontsize=11)
-    ax3.set_title(f"Execution Time vs. $N$ (Fixed $M={fixed_M}$)", fontsize=12)
-    ax3.grid(True, which="both", linestyle="--", alpha=0.5)
-    ax3.legend(fontsize=9)
-
-    plt.tight_layout()
-    plt.show()
 
 
 def plot_3x3_disk_error_comparison(problem, N_list=[32, 64, 128], M=64,
@@ -394,7 +322,7 @@ def plot_3x3_disk_error_comparison(problem, N_list=[32, 64, 128], M=64,
     Rows: N = 32, N = 64, N = 128
     Columns: Adapted NUFFT | Adapted NUDFT | Uniform FFT
     """
-    fig = plt.figure(figsize=(18, 14))
+    fig = plt.figure(figsize=(11, 8.5))
     methods = [
         ("Adapted NUFFT", 1, False),
         ("Adapted NUDFT", 1, True),
@@ -424,7 +352,7 @@ def plot_3x3_disk_error_comparison(problem, N_list=[32, 64, 128], M=64,
             Ep = np.vstack([err, err[0, :]])
 
             surf = ax.plot_surface(Xp, Yp, Ep, cmap='inferno', edgecolor='none')
-            ax.set_title(f"{meth_name} (N={N}, M={M})\n$L_2$ Error = {res['L2_rel']:.2e}", fontsize=10)
+            ax.set_title(f"{meth_name} (N={N}, M={M})\n$L_2$ Error = {res['L2_rel']:.2e}", fontsize=8)
             ax.set_xlabel("x", fontsize=8)
             ax.set_ylabel("y", fontsize=8)
             ax.set_zlabel("Error", fontsize=8)
@@ -445,7 +373,7 @@ def plot_adapted_vs_highres_uniform(problem, N_adapt=32, N_unif_high=256, M=64,
     2. Adapted NUDFT (low N = 32)
     3. Uniform FFT (cranked up high-resolution N = 256 or 512)
     """
-    fig = plt.figure(figsize=(18, 5))
+    fig = plt.figure(figsize=(11, 3.5))
 
     # Case 1: Adapted NUFFT
     th_ad = generate_adapted_clustered_azimuthal(N_adapt, cluster_strength=cluster_strength, center=theta_0)
@@ -484,7 +412,7 @@ def plot_adapted_vs_highres_uniform(problem, N_adapt=32, N_unif_high=256, M=64,
         Ep = np.vstack([err, err[0, :]])
 
         surf = ax.plot_surface(Xp, Yp, Ep, cmap='inferno', edgecolor='none')
-        ax.set_title(f"{title}\n$L_2$ Error = {res['L2_rel']:.2e} | t = {res['runtime']:.4f}s", fontsize=11)
+        ax.set_title(f"{title}\n$L_2$ Error = {res['L2_rel']:.2e} | t = {res['runtime']:.4f}s", fontsize=8)
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("Pointwise Error")
@@ -492,3 +420,358 @@ def plot_adapted_vs_highres_uniform(problem, N_adapt=32, N_unif_high=256, M=64,
 
     plt.tight_layout()
     plt.show()
+
+def render_combined_runtime_table(df_results):
+    """
+    Render a single table with:
+      - Rows: N (angular points)
+      - Columns: (method, M) as a MultiIndex
+
+    So each method forms a multi-column block over M.
+    """
+    # Build a pivot: index N, columns (method, M), values runtime
+    pivot = df_results.pivot_table(
+        index="N",
+        columns=["method", "M"],
+        values="runtime"
+    )
+
+    # Sort columns by method then M for readability
+    pivot = pivot.sort_index(axis=1)
+
+    # Format as readable strings
+    formatted = pivot.copy()
+    formatted = formatted.map(lambda v: f"{v:.4f}" if np.isfinite(v) else "—")
+
+    print(f"\n{'='*75}\nCombined Runtime Table — Methods × M (index N)\n{'='*75}")
+    display(HTML(formatted.to_html(classes="table table-bordered table-striped text-center")))
+
+    return pivot
+
+def render_combined_error_table(df_results, value_col="L2_rel"):
+    """
+    Render one N-vs-M error table for every method.
+
+    Rows:
+        N (angular grid points)
+
+    Column groups:
+        Method -> M (radial grid points)
+
+    Example:
+                         Adapted NUFFT              Adapted NUDFT              Uniform FFT
+                    M=16   M=32  M=64 ...     M=16   M=32  M=64 ...     M=16   M=32  M=64 ...
+        N=16         ...    ...    ...          ...    ...    ...          ...    ...    ...
+        N=32         ...    ...    ...          ...    ...    ...          ...    ...    ...
+    """
+    method_order = [
+        "Adapted NUFFT",
+        "Adapted NUDFT",
+        "Uniform FFT",
+    ]
+
+    # One row per N; hierarchical columns: method -> M.
+    pivot = df_results.pivot_table(
+        index="N",
+        columns=["method", "M"],
+        values=value_col,
+        aggfunc="first",
+    )
+
+    # Preserve the intended method order and sort M within each method.
+    available_methods = [
+        method for method in method_order
+        if method in df_results["method"].unique()
+    ]
+
+    ordered_columns = [
+        (method, M)
+        for method in available_methods
+        for M in sorted(df_results["M"].unique())
+        if (method, M) in pivot.columns
+    ]
+
+    pivot = pivot.reindex(columns=ordered_columns).sort_index()
+
+    formatted = pivot.copy()
+    formatted = formatted.map(
+        lambda value: f"{value:.2e}" if np.isfinite(value) else "—"
+    )
+
+    if value_col == "L2_rel":
+        title = "Relative L2 Error"
+    elif value_col == "Linf_rel":
+        title = "Relative L∞ Error"
+    else:
+        title = value_col
+
+    print(f"\n{'=' * 90}\n{title} — N vs M, All Methods\n{'=' * 90}")
+
+    display(
+        HTML(
+            formatted.to_html(
+                classes="table table-bordered table-striped text-center",
+                border=0,
+            )
+        )
+    )
+
+    return pivot
+
+def plot_extreme_runtime_2x2(df_results, N_min=None, N_max=None, M_min=None, M_max=None):
+    """
+    Plot a 2×2 panel of runtimes for:
+      - Top-left: N = N_min, runtime vs M
+      - Top-right: N = N_max, runtime vs M
+      - Bottom-left: M = M_min, runtime vs N
+      - Bottom-right: M = M_max, runtime vs N
+
+    All panels share the same y-axis limits.
+    """
+    # Infer extremes if not provided
+    if N_min is None:
+        N_min = df_results["N"].min()
+    if N_max is None:
+        N_max = df_results["N"].max()
+    if M_min is None:
+        M_min = df_results["M"].min()
+    if M_max is None:
+        M_max = df_results["M"].max()
+
+    methods = sorted(df_results["method"].unique())
+
+    colors = {
+        "Adapted NUFFT": "crimson",
+        "Adapted NUDFT": "forestgreen",
+        "Uniform FFT": "royalblue",
+    }
+    markers = {
+        "Adapted NUFFT": "s-",
+        "Adapted NUDFT": "^-",
+        "Uniform FFT": "o-",
+    }
+
+    # Global runtime range for shared y-axis
+    rmin = df_results["runtime"].min()
+    rmax = df_results["runtime"].max()
+    # avoid zero issues on log scale
+    if rmin <= 0:
+        rmin = df_results[df_results["runtime"] > 0]["runtime"].min()
+    rmin *= 0.8
+    rmax *= 1.2
+
+    fig, axes = plt.subplots(2, 2, figsize=(7.5, 5.8))
+    (ax11, ax12), (ax21, ax22) = axes
+
+    # Top-left: N = N_min, runtime vs M
+    sub_Nmin = df_results[df_results["N"] == N_min]
+    for meth, grp in sub_Nmin.groupby("method"):
+        grp_s = grp.sort_values("M")
+        ax11.loglog(
+            grp_s["M"], grp_s["runtime"],
+            markers.get(meth, "o-"),
+            color=colors.get(meth, "black"),
+            lw=1.8, ms=5, label=meth,
+        )
+    ax11.set_xlabel("Radial Grid Points $M$")
+    ax11.set_ylabel("Runtime (seconds)")
+    ax11.set_title(f"$N = {N_min}$ — Runtime vs $M$")
+    ax11.grid(True, which="both", ls="--", alpha=0.5)
+    ax11.set_ylim(rmin, rmax)
+
+    # Top-right: N = N_max, runtime vs M
+    sub_Nmax = df_results[df_results["N"] == N_max]
+    for meth, grp in sub_Nmax.groupby("method"):
+        grp_s = grp.sort_values("M")
+        ax12.loglog(
+            grp_s["M"], grp_s["runtime"],
+            markers.get(meth, "o-"),
+            color=colors.get(meth, "black"),
+            lw=1.8, ms=5, label=meth,
+        )
+    ax12.set_xlabel("Radial Grid Points $M$")
+    ax12.set_ylabel("Runtime (seconds)")
+    ax12.set_title(f"$N = {N_max}$ — Runtime vs $M$")
+    ax12.grid(True, which="both", ls="--", alpha=0.5)
+    ax12.set_ylim(rmin, rmax)
+
+    # Bottom-left: M = M_min, runtime vs N
+    sub_Mmin = df_results[df_results["M"] == M_min]
+    for meth, grp in sub_Mmin.groupby("method"):
+        grp_s = grp.sort_values("N")
+        ax21.loglog(
+            grp_s["N"], grp_s["runtime"],
+            markers.get(meth, "o-"),
+            color=colors.get(meth, "black"),
+            lw=1.8, ms=5, label=meth,
+        )
+    ax21.set_xlabel("Angular Grid Points $N$")
+    ax21.set_ylabel("Runtime (seconds)")
+    ax21.set_title(f"$M = {M_min}$ — Runtime vs $N$")
+    ax21.grid(True, which="both", ls="--", alpha=0.5)
+    ax21.set_ylim(rmin, rmax)
+
+    # Bottom-right: M = M_max, runtime vs N
+    sub_Mmax = df_results[df_results["M"] == M_max]
+    for meth, grp in sub_Mmax.groupby("method"):
+        grp_s = grp.sort_values("N")
+        ax22.loglog(
+            grp_s["N"], grp_s["runtime"],
+            markers.get(meth, "o-"),
+            color=colors.get(meth, "black"),
+            lw=1.8, ms=5, label=meth,
+        )
+    ax22.set_xlabel("Angular Grid Points $N$")
+    ax22.set_ylabel("Runtime (seconds)")
+    ax22.set_title(f"$M = {M_max}$ — Runtime vs $N$")
+    ax22.grid(True, which="both", ls="--", alpha=0.5)
+    ax22.set_ylim(rmin, rmax)
+
+    # One shared legend
+    handles, labels = ax11.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=len(methods), fontsize=9, frameon=False)
+
+    fig.suptitle("Chebyshev Problem 1 — Extreme N,M Runtime Comparisons", fontsize=12, y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    plt.show()
+
+def plot_accuracy_from_df(df_results, fixed_M=64, fixed_N=64):
+    """
+    Two-panel accuracy comparison:
+      Left:  L2 error vs N at fixed M.
+      Right: L2 error vs M at fixed N.
+
+    Both panels share the same y-axis.
+    """
+    fig, (ax1, ax2) = plt.subplots(
+        1, 2,
+        figsize=(7.5, 3.2),
+        sharey=True
+    )
+
+    colors = {
+        "Adapted NUFFT": "crimson",
+        "Adapted NUDFT": "forestgreen",
+        "Uniform FFT": "royalblue",
+    }
+    markers = {
+        "Adapted NUFFT": "s--",
+        "Adapted NUDFT": "^-.",
+        "Uniform FFT": "o-",
+    }
+
+    # Left: error vs N at fixed M
+    sub_M = df_results[df_results["M"] == fixed_M]
+    for meth, grp in sub_M.groupby("method"):
+        grp_s = grp.sort_values("N")
+        ax1.loglog(
+            grp_s["N"], grp_s["L2_rel"],
+            markers.get(meth, "o-"),
+            color=colors.get(meth, "black"),
+            lw=1.5, ms=4, label=meth,
+        )
+
+    ax1.set_xlabel("Angular points $N$", fontsize=9)
+    ax1.set_ylabel(r"Relative $L_2$ error", fontsize=9)
+    ax1.set_title(f"Error vs $N$ ($M={fixed_M}$)", fontsize=8)
+    ax1.grid(True, which="both", linestyle="--", alpha=0.45)
+    ax1.tick_params(labelsize=8)
+    ax1.legend(fontsize=7)
+
+    # Right: error vs M at fixed N
+    sub_N = df_results[df_results["N"] == fixed_N]
+    for meth, grp in sub_N.groupby("method"):
+        grp_s = grp.sort_values("M")
+        ax2.loglog(
+            grp_s["M"], grp_s["L2_rel"],
+            markers.get(meth, "o-"),
+            color=colors.get(meth, "black"),
+            lw=1.5, ms=4, label=meth,
+        )
+
+    ax2.set_xlabel("Radial points $M$", fontsize=9)
+    ax2.set_title(f"Error vs $M$ ($N={fixed_N}$)", fontsize=8)
+    ax2.grid(True, which="both", linestyle="--", alpha=0.45)
+    ax2.tick_params(labelsize=8)
+    ax2.legend(fontsize=7)
+
+    fig.suptitle("Chebyshev Problem 1 — Accuracy Comparison", fontsize=8, y=1.02)
+    plt.tight_layout()
+    plt.show()
+
+def plot_accuracy_faceted_by_method(df_results, N_values=None, M_values=None):
+    """
+    2 x K accuracy plot:
+      Top row: Error vs M, one curve per N; shared y-axis across methods.
+      Bottom row: Error vs N, one curve per M; shared y-axis across methods.
+    """
+    methods = sorted(df_results["method"].unique())
+    K = len(methods)
+
+    if N_values is None:
+        N_values = sorted(df_results["N"].unique())
+    if M_values is None:
+        M_values = sorted(df_results["M"].unique())
+
+    fig, axes = plt.subplots(
+        2, K,
+        figsize=(3.5 * K, 5.0),
+        sharey="row",
+        squeeze=False
+    )
+
+    cmap = plt.get_cmap("tab10")
+
+    for col, meth in enumerate(methods):
+        sub = df_results[df_results["method"] == meth]
+
+        # Top row: Error vs M, one curve for each N
+        ax_top = axes[0, col]
+        for i, N in enumerate(N_values):
+            grp = sub[sub["N"] == N].sort_values("M")
+            if grp.empty:
+                continue
+
+            ax_top.loglog(
+                grp["M"], grp["L2_rel"],
+                marker="o", ms=3.5, lw=1.2,
+                color=cmap(i % 10),
+                label=f"N={N}",
+            )
+
+        ax_top.set_title(f"{meth}\nError vs $M$", fontsize=9)
+        ax_top.set_xlabel("Radial points $M$", fontsize=8)
+        ax_top.grid(True, which="both", linestyle="--", alpha=0.45)
+        ax_top.tick_params(labelsize=7)
+        ax_top.legend(fontsize=6, loc="best")
+
+        if col == 0:
+            ax_top.set_ylabel(r"Relative $L_2$ error", fontsize=8)
+
+        # Bottom row: Error vs N, one curve for each M
+        ax_bot = axes[1, col]
+        for i, M in enumerate(M_values):
+            grp = sub[sub["M"] == M].sort_values("N")
+            if grp.empty:
+                continue
+
+            ax_bot.loglog(
+                grp["N"], grp["L2_rel"],
+                marker="s", ms=3.5, lw=1.2,
+                color=cmap(i % 10),
+                label=f"M={M}",
+            )
+
+        ax_bot.set_title(f"{meth}\nError vs $N$", fontsize=9)
+        ax_bot.set_xlabel("Angular points $N$", fontsize=8)
+        ax_bot.grid(True, which="both", linestyle="--", alpha=0.45)
+        ax_bot.tick_params(labelsize=7)
+        ax_bot.legend(fontsize=6, loc="best")
+
+        if col == 0:
+            ax_bot.set_ylabel(r"Relative $L_2$ error", fontsize=8)
+
+    fig.suptitle("Chebyshev Problem 1 — Accuracy by Method", fontsize=8, y=0.99)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
+

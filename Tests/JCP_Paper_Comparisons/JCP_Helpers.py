@@ -1,3 +1,4 @@
+from tqdm.asyncio import tqdm
 import numpy as np
 import pandas as pd
 import sympy as sp
@@ -310,3 +311,30 @@ def display_timing_results(df_timing, methods, N_values, M_values):
         df2 = df_timing[df_timing["method"] == name]
         display(df2.pivot(index="N", columns="M", values="time").reindex(index=N_values, columns=M_values).map(dash_if_nan))
         display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")[m] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel", "time"]}, axis=1).reindex(M_values).map(dash_if_nan))
+
+
+from tqdm.auto import tqdm
+
+def run_table_1_tracked(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, desc="Running", position=1):
+    table1_results = []
+    total = len(methods) * len(N_values) * len(M_values)
+
+    pbar = tqdm(total=total, desc=desc, unit="case", position=position, leave=False)
+    for method in methods:
+        for N in N_values:
+            for M in M_values:
+                case_start = time.perf_counter()
+                res = run_single_case(
+                    N=N, M=M, method_cfg=method, bc_name="dirichlet", quad_name="trapezoidal",
+                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann,
+                    BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                )
+                wall_time = time.perf_counter() - case_start
+                res["wall_time"] = wall_time
+                table1_results.append(res)
+
+                pbar.set_postfix({"method": method["name"], "N": N, "M": M, "t": f"{wall_time:.2f}s"})
+                pbar.update(1)
+    pbar.close()
+
+    return pd.DataFrame(table1_results)
