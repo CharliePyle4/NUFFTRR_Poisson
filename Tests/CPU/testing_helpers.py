@@ -496,7 +496,7 @@ def plot_accuracy_table1(df, title_prefix="Table 1"):
     if m_nufft_u: solver_groups.append(("NUFFT (Unsquared)", m_nufft_u))
     
     num_cols = len(solver_groups)
-    fig, axes = plt.subplots(2, num_cols, figsize=(6 * num_cols, 10), sharey=True)
+    fig, axes = plt.subplots(2, num_cols, figsize=(4.5 * num_cols, 5), sharey=True)
     if num_cols == 1: axes = axes.reshape(2, 1)
     
     # Top Row: Error vs M (for each N)
@@ -538,7 +538,7 @@ def plot_runtime_table1(df, title_prefix="Table 1"):
     
     num_cols = max(len(N_vals), len(M_vals))
     
-    fig, axes = plt.subplots(2, num_cols, figsize=(5 * num_cols, 10), sharey=True)
+    fig, axes = plt.subplots(2, num_cols, figsize=(4 * num_cols, 8), sharey=True)
     
     # Ensure axes is 2D even if num_cols is 1
     if num_cols == 1:
@@ -587,7 +587,7 @@ def plot_accuracy_table2(df, title_prefix="Table 2"):
     comparing FFT, NUDFT, and NUFFT vs M.
     """
     df_fmt = _prepare_table2_df(df)
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=True)
+    fig, axes = plt.subplots(2, 2, figsize=(9, 6), sharey=True)
     combos = [
         ("Trapezoidal", "Dirichlet", axes[0, 0]),
         ("Trapezoidal", "Neumann", axes[0, 1]),
@@ -615,7 +615,7 @@ def plot_runtime_table2(df, title_prefix="Table 2"):
     comparing FFT, NUDFT, and NUFFT vs M.
     """
     df_fmt = _prepare_table2_df(df)
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey=True)
+    fig, axes = plt.subplots(2, 2, figsize=(9, 6), sharey=True)
     combos = [
         ("Trapezoidal", "Dirichlet", axes[0, 0]),
         ("Trapezoidal", "Neumann", axes[0, 1]),
@@ -658,7 +658,7 @@ def plot_accuracy_comparison(df, index_col="N", title_prefix="Accuracy Compariso
     if m_nufft_u: groups.append(("NUFFT (Unsquared)", m_nufft_u))
     
     num_cols = len(groups)
-    fig, axes = plt.subplots(1, num_cols, figsize=(6 * num_cols, 5), sharey=True)
+    fig, axes = plt.subplots(1, num_cols, figsize=(4.5 * num_cols, 3), sharey=True)
     if num_cols == 1: axes = [axes]
     
     solver_groups = [(g[0], g[1], axes[i]) for i, g in enumerate(groups)]
@@ -699,7 +699,7 @@ def plot_runtime_comparison(df, index_col="N", title_prefix="Accuracy Comparison
     if m_nufft_u: groups.append(("NUFFT (Unsquared)", m_nufft_u))
     
     num_cols = len(groups)
-    fig, axes = plt.subplots(1, num_cols, figsize=(6 * num_cols, 5), sharey=True)
+    fig, axes = plt.subplots(1, num_cols, figsize=(4.5 * num_cols, 4), sharey=True)
     if num_cols == 1: axes = [axes]
     
     solver_groups = [(g[0], g[1], axes[i]) for i, g in enumerate(groups)]
