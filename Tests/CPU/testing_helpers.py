@@ -55,6 +55,196 @@ def g_neumann(x, y):
     return u_x(x, y) * x + u_y(x, y) * y
 
 # ---------------------------------------------------------
+# Optimal Lambda & Parameter Table Resolution
+# ---------------------------------------------------------
+def compute_optimal_lambda(theta_j, N, M, is_nudft=False):
+    """
+    Pre-calculates the optimal lambda / reg_param from grid parameters (N, M, theta).
+    Balances radial quadrature discretization error O(M^-2.5) with non-uniform angular
+    Beurling-Landau frame distortion rho = max(d_theta) / (2*pi/N).
+    """
+    if theta_j is None:
+        return 1e-12
+    theta_arr = np.asarray(theta_j, dtype=float)
+    if theta_arr.size == 0:
+        return 1e-12
+    if theta_arr.ndim > 1:
+        theta_arr = theta_arr[:, 0]
+    
+    theta_sorted = np.sort(theta_arr % (2.0 * np.pi))
+    d_theta = np.diff(np.concatenate([theta_sorted, [theta_sorted[0] + 2.0 * np.pi]]))
+    avg_gap = 2.0 * np.pi / N
+    rho = np.max(d_theta) / avg_gap  # rho >= 1.0 (rho=1.0 is uniform)
+    
+    if is_nudft:
+        if rho <= 1.5:
+            return 1e-12
+        else:
+            cond = 1e-13 * (rho * N) ** 2.0
+            return float(np.clip(cond, 1e-12, 1e-6))
+    else:
+        # NUFFT: balance radial error floor O(M^-2.5) with angular frame distortion
+        base_lambda = 0.05 * (M ** -2.5)
+        
+        if rho > 1.5:
+            distortion_factor = ((rho - 1.0) ** 2.0) * (N / 32.0)
+            reg = base_lambda * (1.0 + 50.0 * distortion_factor)
+            return float(np.clip(reg, 1e-10, 1e-4))
+        else:
+            return float(np.clip(base_lambda, 1e-11, 1e-6))
+
+
+def resolve_reg_param(cfg_reg, method, N, M, iAngle=None):
+    """
+    Resolves the regularization parameter (lambda) for a specific run (N, M, method).
+    
+    Supports:
+    1. Single float / int (e.g. 1e-12)
+    2. Dict keyed by method name, label, or mesh kind:
+       e.g. {'Fixed-rand-NUFFT': 1e-8, 'sine': 1e-6}
+    3. Dict keyed by (method, N), (method, M), (method, N, M), or (N, M):
+       e.g. {('Fixed-sine-NUFFT', 128): 1e-4, (32, 32): 1e-10}
+    4. Nested dict:
+       e.g. {'Fixed-sine-NUFFT': {32: 1e-6, 64: 1e-6, 128: 1e-4}}
+    5. List / tuple / 1D array (vector matching standard resolutions [32, 64, 128, 256, 512])
+    6. pandas DataFrame (table where index is N or M and columns are methods)
+    7. Callable function: fn(N, M, method)
+    8. Method-level override: method.get('reg_param')
+    """
+    # 1. Check method-level override if specified directly in method dictionary
+    if "reg_param" in method and method["reg_param"] is not None:
+        cfg = method["reg_param"]
+    elif "lambda" in method and method["lambda"] is not None:
+        cfg = method["lambda"]
+    else:
+        cfg = cfg_reg
+
+    if cfg is None:
+        return 1e-12
+
+    # If callable
+    if callable(cfg):
+        return float(cfg(N, M, method))
+
+    # If simple float / int
+    if isinstance(cfg, (int, float, np.floating, np.integer)):
+        return float(cfg)
+
+    m_name = method.get("name", "")
+    m_label = method.get("label", "")
+    m_kind = method.get("mesh_kind", "")
+    is_nudft = method.get("use_nudft", False)
+
+    # If string 'auto' or 'optimal'
+    if isinstance(cfg, str):
+        if cfg.lower() in ("auto", "optimal"):
+            return compute_optimal_lambda(iAngle, N, M, is_nudft=is_nudft)
+        try:
+            return float(cfg)
+        except ValueError:
+            return 1e-12
+
+    # If pandas DataFrame
+    if isinstance(cfg, pd.DataFrame):
+        for col_key in (m_name, m_label, m_kind):
+            if col_key in cfg.columns:
+                if N in cfg.index:
+                    return float(cfg.loc[N, col_key])
+                elif M in cfg.index:
+                    return float(cfg.loc[M, col_key])
+                elif (N, M) in cfg.index:
+                    return float(cfg.loc[(N, M), col_key])
+
+    # If dictionary
+    if isinstance(cfg, dict):
+        # Check specific tuple keys first: (name, N, M), (name, N), (name, M), (N, M)
+        for key in [
+            (m_name, N, M), (m_label, N, M), (m_kind, N, M),
+            (m_name, N), (m_label, N), (m_kind, N),
+            (m_name, M), (m_label, M), (m_kind, M),
+            (N, M), N, M
+        ]:
+            if key in cfg:
+                val = cfg[key]
+                if isinstance(val, (int, float, np.floating, np.integer)):
+                    return float(val)
+                elif isinstance(val, dict):
+                    if N in val: return float(val[N])
+                    if M in val: return float(val[M])
+
+        # Check method name / label / kind keys
+        for key in (m_name, m_label, m_kind):
+            if key in cfg:
+                val = cfg[key]
+                if isinstance(val, (int, float, np.floating, np.integer)):
+                    return float(val)
+                elif isinstance(val, dict):
+                    # 1. Exact (N, M) pair
+                    if (N, M) in val:
+                        return float(val[(N, M)])
+                    # 2. Both "N" and "M" subdictionaries are provided
+                    if "N" in val and "M" in val:
+                        if N != 32 and M == 32 and N in val["N"]:
+                            return float(val["N"][N])
+                        elif M != 32 and N == 32 and M in val["M"]:
+                            return float(val["M"][M])
+                        elif N in val["N"]:
+                            return float(val["N"][N])
+                        elif M in val["M"]:
+                            return float(val["M"][M])
+                    # 3. Explicit "N" subdict
+                    elif "N" in val and N in val["N"]:
+                        return float(val["N"][N])
+                    # 4. Explicit "M" subdict
+                    elif "M" in val and M in val["M"]:
+                        return float(val["M"][M])
+                    # 5. Flat dictionary keyed by integers (e.g. {32: ..., 64: ...})
+                    elif N in val:
+                        return float(val[N])
+                    elif M in val:
+                        return float(val[M])
+                elif isinstance(val, (list, tuple, np.ndarray)):
+                    res_list = [32, 64, 128, 256, 512]
+                    if N in res_list and len(val) == len(res_list):
+                        return float(val[res_list.index(N)])
+                    elif M in res_list and len(val) == len(res_list):
+                        return float(val[res_list.index(M)])
+
+        # Check default key in dict
+        if "default" in cfg:
+            return float(cfg["default"])
+
+    return 1e-12
+
+# ---------------------------------------------------------
+# Global Config
+# ---------------------------------------------------------
+GLOBAL_CONFIG = {
+    'R': 1.0,
+    'rad_unif': 1,
+    'tol_nufft': 1e-10,
+    'maxiter_nufft': 200,
+    'reg_param': 'auto',
+    'eps_finufft': 1e-12,
+    'precond_shift': 1e-3,
+    'kde_oversample': 4,
+    'kde_bandwidth': 1.0,
+    'quad_rule': 1,
+    'BC_choice': 1,
+    'problem_type': 0,
+    'custom_problem': None
+}
+
+def set_global_config(**kwargs):
+    global GLOBAL_CONFIG, R, RAD_UNIF
+    GLOBAL_CONFIG.update(kwargs)
+    if 'R' in kwargs: R = kwargs['R']
+    if 'rad_unif' in kwargs: RAD_UNIF = kwargs['rad_unif']
+
+def get_global_config():
+    return GLOBAL_CONFIG
+
+# ---------------------------------------------------------
 # Grid Generation Cache
 # ---------------------------------------------------------
 ANGLE_CACHE = {}
@@ -85,7 +275,7 @@ def get_angle_mesh(method, N, M):
 # ---------------------------------------------------------
 # Core Single Test Execution
 # ---------------------------------------------------------
-def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
+def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None, **kwargs):
     iRadius = generate_uniform_radial(M, R)
     iAngle = get_angle_mesh(method, N, M)
 
@@ -108,10 +298,27 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
     else:
         u_fourier_0 = np.array([])
 
+    cfg_reg = reg_param if reg_param is not None else GLOBAL_CONFIG.get('reg_param', 'auto')
+    actual_reg = resolve_reg_param(cfg_reg, method, N, M, iAngle)
+
     t0 = time.perf_counter()
     with warnings.catch_warnings():
         if mute:
             warnings.simplefilter("ignore")
+
+        if "grid_type" in method:
+            grid_type = method["grid_type"]
+        else:
+            if solver_azu == 2:
+                grid_type = 1
+            elif solver_azu == 1:
+                mesh_kind = method.get("mesh_kind", "")
+                if mesh_kind in ("jittered", "stratified_rand", "stratified_random", "stratified"):
+                    grid_type = 2
+                else:
+                    grid_type = 3
+            else:
+                grid_type = solver_azu
 
         try:
             u_approx = poisson_solver(
@@ -119,9 +326,15 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
                 N, M, iRadius, iAngle, R,
                 quad_rule=quad_rule, BC_choice=bc_choice,
                 rad_unif=RAD_UNIF,
-                azu_unif=solver_azu,
+                grid_type=grid_type,
                 use_nudft_angular=nudft_flag,
-                maxiter_nufft=200, tol_nufft=1e-10
+                maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
+                tol_nufft=GLOBAL_CONFIG['tol_nufft'],
+                reg_param=actual_reg,
+                eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
+                precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
+                kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
+                kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
             )
             runtime = time.perf_counter() - t0
 
@@ -141,7 +354,7 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False):
 # ---------------------------------------------------------
 # Table Generation Pipelines
 # ---------------------------------------------------------
-def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_Table1", mute=False):
+def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_Table1", mute=False, reg_param=None, **kwargs):
     results = []
     method_pbar = tqdm(methods, desc=f"Pipeline ({test_type})", disable=False)
     for method in method_pbar:
@@ -153,7 +366,7 @@ def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_T
             pairs = [(N, M) for N in N_values for M in M_values]
             sub_pbar = tqdm(pairs, desc=f"  {method['label']}", leave=False, disable=False)
             for N, M in sub_pbar:
-                res = run_case(N, M, method, bc_choice=1, quad_rule=1, mute=mute)
+                res = run_case(N, M, method, bc_choice=1, quad_rule=1, mute=mute, reg_param=reg_param, **kwargs)
                 results.append(res)
                 if not mute:
                     print(f"  N={N:4d}, M={M:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
@@ -161,7 +374,7 @@ def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_T
             tasks = [(M, quad, bc) for M in M_values for quad in [1, 2] for bc in [1, 2]]
             sub_pbar = tqdm(tasks, desc=f"  {method['label']}", leave=False, disable=False)
             for M, quad, bc in sub_pbar:
-                res = run_case(fixed_other, M, method, bc_choice=bc, quad_rule=quad, mute=mute)
+                res = run_case(fixed_other, M, method, bc_choice=bc, quad_rule=quad, mute=mute, reg_param=reg_param, **kwargs)
                 results.append(res)
                 q_str = "Trapezoidal" if quad == 1 else "Simpson"
                 bc_str = "Dirichlet" if bc == 1 else "Neumann"
@@ -170,14 +383,14 @@ def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_T
         elif test_type == "Accuracy_VaryN":
             sub_pbar = tqdm(N_values, desc=f"  {method['label']}", leave=False, disable=False)
             for N in sub_pbar:
-                res = run_case(N, fixed_other, method, bc_choice=1, quad_rule=1, mute=mute)
+                res = run_case(N, fixed_other, method, bc_choice=1, quad_rule=1, mute=mute, reg_param=reg_param, **kwargs)
                 results.append(res)
                 if not mute:
                     print(f"  N={N:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
         elif test_type == "Accuracy_VaryM":
             sub_pbar = tqdm(M_values, desc=f"  {method['label']}", leave=False, disable=False)
             for M in sub_pbar:
-                res = run_case(fixed_other, M, method, bc_choice=1, quad_rule=1, mute=mute)
+                res = run_case(fixed_other, M, method, bc_choice=1, quad_rule=1, mute=mute, reg_param=reg_param, **kwargs)
                 results.append(res)
                 if not mute:
                     print(f"  M={M:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
@@ -213,14 +426,24 @@ def render_pivot(df, index_col, columns_col, value_col, title):
     for c in cols:
         if c not in sorted_cols:
             sorted_cols.append(c)
-            
+
     pivot = pivot[sorted_cols]
 
     def fmt(x):
         if pd.isna(x): return "—"
         return f"{x:.2e}" if ("L2" in value_col or (isinstance(x, (float, np.float64)) and x < 1e-3)) else f"{x:.4f}"
-        
-    display(HTML(pivot.map(fmt).to_html()))
+
+    formatted_table = pivot.map(fmt)
+    
+    # Check if we are inside a Jupyter notebook environment
+    try:
+        from IPython import get_ipython
+        if get_ipython() is not None and 'IPKernelApp' in get_ipython().config:
+            display(HTML(formatted_table.to_html()))
+        else:
+            print(formatted_table.to_string())
+    except Exception:
+        print(formatted_table.to_string())
 
 
 def render_accuracy(df, index_col, columns_col, title_prefix):
@@ -258,14 +481,23 @@ def plot_accuracy_table1(df, title_prefix="Table 1"):
     - Top row (3 subplots): Error vs M for FFT, NUDFT, NUFFT
     - Bottom row (3 subplots): Error vs N for FFT, NUDFT, NUFFT
     """
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     methods = df["label"].unique()
-    
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
     m_nudft = [m for m in methods if "NUDFT" in m]
-    m_nufft = [m for m in methods if "NUFFT" in m]
+    m_nufft_t = [m for m in methods if "NUFFT" in m and "Toeplitz" in m]
+    m_nufft_u = [m for m in methods if "NUFFT" in m and "Unsquared" in m]
+    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m]
     
-    solver_groups = [("Uniform / FFT", m_fft), ("NUDFT", m_nudft), ("NUFFT", m_nufft)]
+    solver_groups = []
+    if m_fft: solver_groups.append(("Uniform / FFT", m_fft))
+    if m_nudft: solver_groups.append(("NUDFT", m_nudft))
+    if m_nufft_gen: solver_groups.append(("NUFFT", m_nufft_gen))
+    if m_nufft_t: solver_groups.append(("NUFFT (Toeplitz)", m_nufft_t))
+    if m_nufft_u: solver_groups.append(("NUFFT (Unsquared)", m_nufft_u))
+    
+    num_cols = len(solver_groups)
+    fig, axes = plt.subplots(2, num_cols, figsize=(4.5 * num_cols, 5), sharey=True)
+    if num_cols == 1: axes = axes.reshape(2, 1)
     
     # Top Row: Error vs M (for each N)
     for col_idx, (s_name, s_methods) in enumerate(solver_groups):
@@ -297,42 +529,52 @@ def plot_accuracy_table1(df, title_prefix="Table 1"):
 
 def plot_runtime_table1(df, title_prefix="Table 1"):
     """
-    Generate 6 subplots (2x3 grid) for Table 1 Runtime:
-    - Top row (3 subplots): Runtime vs M for FFT, NUDFT, NUFFT
-    - Bottom row (3 subplots): Runtime vs N for FFT, NUDFT, NUFFT
+    Generate 2xN grid for Table 1 Runtime:
+    - Top row: Runtime vs M, one subplot for each N. Each plot has the 3 methods.
+    - Bottom row: Runtime vs N, one subplot for each M. Each plot has the 3 methods.
     """
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    methods = df["label"].unique()
+    N_vals = sorted(df["N"].unique())
+    M_vals = sorted(df["M"].unique())
     
-    m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
-    m_nudft = [m for m in methods if "NUDFT" in m]
-    m_nufft = [m for m in methods if "NUFFT" in m]
+    num_cols = max(len(N_vals), len(M_vals))
     
-    solver_groups = [("Uniform / FFT", m_fft), ("NUDFT", m_nudft), ("NUFFT", m_nufft)]
+    fig, axes = plt.subplots(2, num_cols, figsize=(4 * num_cols, 8), sharey=True)
     
-    # Top Row: Runtime vs M (for each N)
-    for col_idx, (s_name, s_methods) in enumerate(solver_groups):
-        ax = axes[0, col_idx]
-        df_sub = df[df["label"].isin(s_methods)]
-        for N, group in df_sub.groupby("N"):
-            ax.loglog(group["M"], group["runtime"], marker="o", label=f"N={N}")
+    # Ensure axes is 2D even if num_cols is 1
+    if num_cols == 1:
+        axes = axes.reshape(2, 1)
+    
+    # Top Row: Runtime vs M for each N
+    for i, N in enumerate(N_vals):
+        ax = axes[0, i]
+        df_sub = df[df["N"] == N]
+        for label, group in df_sub.groupby("label"):
+            group = group.sort_values("M")
+            ax.loglog(group["M"], group["runtime"], marker="o", label=label)
         ax.set_xlabel("Radial Grid Points (M)")
         ax.set_ylabel("Runtime (seconds)")
-        ax.set_title(f"{title_prefix} - {s_name} (Runtime vs M)")
+        ax.set_title(f"{title_prefix} (N={N}) - Runtime vs M")
         ax.grid(True, which="both", ls="--", alpha=0.5)
         ax.legend(fontsize=8)
+        
+    for i in range(len(N_vals), num_cols):
+        axes[0, i].axis('off')
 
-    # Bottom Row: Runtime vs N (for each M)
-    for col_idx, (s_name, s_methods) in enumerate(solver_groups):
-        ax = axes[1, col_idx]
-        df_sub = df[df["label"].isin(s_methods)]
-        for M, group in df_sub.groupby("M"):
-            ax.loglog(group["N"], group["runtime"], marker="s", label=f"M={M}")
+    # Bottom Row: Runtime vs N for each M
+    for i, M in enumerate(M_vals):
+        ax = axes[1, i]
+        df_sub = df[df["M"] == M]
+        for label, group in df_sub.groupby("label"):
+            group = group.sort_values("N")
+            ax.loglog(group["N"], group["runtime"], marker="s", label=label)
         ax.set_xlabel("Angular Grid Points (N)")
         ax.set_ylabel("Runtime (seconds)")
-        ax.set_title(f"{title_prefix} - {s_name} (Runtime vs N)")
+        ax.set_title(f"{title_prefix} (M={M}) - Runtime vs N")
         ax.grid(True, which="both", ls="--", alpha=0.5)
         ax.legend(fontsize=8)
+        
+    for i in range(len(M_vals), num_cols):
+        axes[1, i].axis('off')
 
     plt.tight_layout()
     plt.show()
@@ -345,7 +587,7 @@ def plot_accuracy_table2(df, title_prefix="Table 2"):
     comparing FFT, NUDFT, and NUFFT vs M.
     """
     df_fmt = _prepare_table2_df(df)
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(9, 6), sharey=True)
     combos = [
         ("Trapezoidal", "Dirichlet", axes[0, 0]),
         ("Trapezoidal", "Neumann", axes[0, 1]),
@@ -373,7 +615,7 @@ def plot_runtime_table2(df, title_prefix="Table 2"):
     comparing FFT, NUDFT, and NUFFT vs M.
     """
     df_fmt = _prepare_table2_df(df)
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(9, 6), sharey=True)
     combos = [
         ("Trapezoidal", "Dirichlet", axes[0, 0]),
         ("Trapezoidal", "Neumann", axes[0, 1]),
@@ -401,14 +643,25 @@ def plot_accuracy_comparison(df, index_col="N", title_prefix="Accuracy Compariso
     Subplot 2: NUDFT methods (All meshes)
     Subplot 3: NUFFT methods (All meshes)
     """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     methods = df["label"].unique()
-    
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
     m_nudft = [m for m in methods if "NUDFT" in m]
-    m_nufft = [m for m in methods if "NUFFT" in m]
+    m_nufft_t = [m for m in methods if "NUFFT" in m and "Toeplitz" in m]
+    m_nufft_u = [m for m in methods if "NUFFT" in m and "Unsquared" in m]
+    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m]
     
-    solver_groups = [("Uniform / FFT", m_fft, axes[0]), ("NUDFT", m_nudft, axes[1]), ("NUFFT", m_nufft, axes[2])]
+    groups = []
+    if m_fft: groups.append(("Uniform / FFT", m_fft))
+    if m_nudft: groups.append(("NUDFT", m_nudft))
+    if m_nufft_gen: groups.append(("NUFFT", m_nufft_gen))
+    if m_nufft_t: groups.append(("NUFFT (Toeplitz)", m_nufft_t))
+    if m_nufft_u: groups.append(("NUFFT (Unsquared)", m_nufft_u))
+    
+    num_cols = len(groups)
+    fig, axes = plt.subplots(1, num_cols, figsize=(4.5 * num_cols, 3), sharey=True)
+    if num_cols == 1: axes = [axes]
+    
+    solver_groups = [(g[0], g[1], axes[i]) for i, g in enumerate(groups)]
     
     for s_name, s_methods, ax in solver_groups:
         df_sub = df[df["label"].isin(s_methods)]
@@ -431,14 +684,25 @@ def plot_runtime_comparison(df, index_col="N", title_prefix="Accuracy Comparison
     Subplot 2: NUDFT methods (All meshes)
     Subplot 3: NUFFT methods (All meshes)
     """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     methods = df["label"].unique()
-    
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
     m_nudft = [m for m in methods if "NUDFT" in m]
-    m_nufft = [m for m in methods if "NUFFT" in m]
+    m_nufft_t = [m for m in methods if "NUFFT" in m and "Toeplitz" in m]
+    m_nufft_u = [m for m in methods if "NUFFT" in m and "Unsquared" in m]
+    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m]
     
-    solver_groups = [("Uniform / FFT", m_fft, axes[0]), ("NUDFT", m_nudft, axes[1]), ("NUFFT", m_nufft, axes[2])]
+    groups = []
+    if m_fft: groups.append(("Uniform / FFT", m_fft))
+    if m_nudft: groups.append(("NUDFT", m_nudft))
+    if m_nufft_gen: groups.append(("NUFFT", m_nufft_gen))
+    if m_nufft_t: groups.append(("NUFFT (Toeplitz)", m_nufft_t))
+    if m_nufft_u: groups.append(("NUFFT (Unsquared)", m_nufft_u))
+    
+    num_cols = len(groups)
+    fig, axes = plt.subplots(1, num_cols, figsize=(4.5 * num_cols, 4), sharey=True)
+    if num_cols == 1: axes = [axes]
+    
+    solver_groups = [(g[0], g[1], axes[i]) for i, g in enumerate(groups)]
     
     for s_name, s_methods, ax in solver_groups:
         df_sub = df[df["label"].isin(s_methods)]
@@ -499,10 +763,25 @@ def run_and_plot_errors_vary_m(N_fixed, M_values, methods, bc_choice=1, quad_rul
 
             u_fourier_0 = compute_zero_mode(u_t, iAngle, method["azu_unif"])[-1] if bc_choice == 2 else np.array([])
 
+            solver_azu = method.get("solver_azu_unif", method["azu_unif"])
+            if "grid_type" in method:
+                grid_type = method["grid_type"]
+            else:
+                if solver_azu == 2:
+                    grid_type = 1
+                elif solver_azu == 1:
+                    mesh_kind = method.get("mesh_kind", "")
+                    if mesh_kind in ("jittered", "stratified_rand", "stratified_random", "stratified"):
+                        grid_type = 2
+                    else:
+                        grid_type = 3
+                else:
+                    grid_type = solver_azu
+
             try:
                 u_approx = poisson_solver(
                     f_values, g_values, u_fourier_0, N_fixed, M, iRadius, iAngle, R,
-                    quad_rule=quad_rule, BC_choice=bc_choice, rad_unif=RAD_UNIF, azu_unif=method.get("solver_azu_unif", method["azu_unif"]),
+                    quad_rule=quad_rule, BC_choice=bc_choice, rad_unif=RAD_UNIF, grid_type=grid_type,
                     use_nudft_angular=method.get("use_nudft", False)
                 )
                 _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)
@@ -620,6 +899,8 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False):
     else:
         u_fourier_0 = np.array([])
 
+    actual_reg = resolve_reg_param(GLOBAL_CONFIG.get('reg_param', 'auto'), method, N, M, iAngle)
+
     t0 = time.perf_counter()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -631,7 +912,13 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False):
                 rad_unif=rad_unif,
                 azu_unif=solver_azu,
                 use_nudft_angular=nudft_flag,
-                maxiter_nufft=50, tol_nufft=1e-8
+                maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
+                tol_nufft=GLOBAL_CONFIG['tol_nufft'],
+                reg_param=actual_reg,
+                eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
+                precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
+                kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
+                kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
             )
             runtime = time.perf_counter() - t0
             _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)
@@ -865,4 +1152,75 @@ def plot_bc_quad_comparison_vs_M(df_bq, N_fixed, methods=None):
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=7)
     plt.tight_layout()
+    plt.show()
+
+
+
+
+def plot_runtime_table1_extremes(df, title_prefix="Table 1 (extreme N,M)"):
+    """
+    2x2 runtime plot using only the lowest and highest N and M:
+      Top-left:  runtime vs M for N = N_min
+      Top-right: runtime vs M for N = N_max
+      Bottom-left:  runtime vs N for M = M_min
+      Bottom-right: runtime vs N for M = M_max
+    All solver labels are plotted in each relevant panel.
+    """
+    N_vals = sorted(df["N"].unique())
+    M_vals = sorted(df["M"].unique())
+    if len(N_vals) < 2 or len(M_vals) < 2:
+        print("Need at least two distinct N and M values for extremes plot.")
+        return
+
+    N_lo, N_hi = N_vals[0], N_vals[-1]
+    M_lo, M_hi = M_vals[0], M_vals[-1]
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharey="row")
+    fig.suptitle(title_prefix)
+
+    # Top-left: runtime vs M for N = N_lo
+    ax = axes[0, 0]
+    df_sub = df[df["N"] == N_lo]
+    for label, group in df_sub.groupby("label"):
+        group = group.sort_values("M")
+        ax.loglog(group["M"], group["runtime"], marker="o", label=label)
+    ax.set_xlabel("Radial Grid Points (M)")
+    ax.set_ylabel("Runtime (seconds)")
+    ax.set_title(f"N = {N_lo} — Runtime vs M")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+    ax.legend(fontsize=8)
+
+    # Top-right: runtime vs M for N = N_hi
+    ax = axes[0, 1]
+    df_sub = df[df["N"] == N_hi]
+    for label, group in df_sub.groupby("label"):
+        group = group.sort_values("M")
+        ax.loglog(group["M"], group["runtime"], marker="o", label=label)
+    ax.set_xlabel("Radial Grid Points (M)")
+    ax.set_title(f"N = {N_hi} — Runtime vs M")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    # Bottom-left: runtime vs N for M = M_lo
+    ax = axes[1, 0]
+    df_sub = df[df["M"] == M_lo]
+    for label, group in df_sub.groupby("label"):
+        group = group.sort_values("N")
+        ax.loglog(group["N"], group["runtime"], marker="s", label=label)
+    ax.set_xlabel("Angular Grid Points (N)")
+    ax.set_ylabel("Runtime (seconds)")
+    ax.set_title(f"M = {M_lo} — Runtime vs N")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+    ax.legend(fontsize=8)
+
+    # Bottom-right: runtime vs N for M = M_hi
+    ax = axes[1, 1]
+    df_sub = df[df["M"] == M_hi]
+    for label, group in df_sub.groupby("label"):
+        group = group.sort_values("N")
+        ax.loglog(group["N"], group["runtime"], marker="s", label=label)
+    ax.set_xlabel("Angular Grid Points (N)")
+    ax.set_title(f"M = {M_hi} — Runtime vs N")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()

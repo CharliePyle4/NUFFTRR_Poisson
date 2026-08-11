@@ -7,7 +7,6 @@ from .fourier.fourier import (
     compute_angular_fourier_coefficients,
     synthesize_spatial_from_fourier,
     compute_u_fourier_coefficients,
-    
 )
 
 from .radial.radial import (
@@ -20,33 +19,45 @@ from .radial.radial import (
 def poisson_solver(f_values, g_values, u_fourier_0,
                    N, M, r_m, theta_j, R,
                    quad_rule, BC_choice,
-                   rad_unif, azu_unif,
+                   rad_unif, grid_type,
                    use_nudft_angular: bool = False,
                    maxiter_nufft: int = 50,
-                   tol_nufft: float = 1e-8):
+                   tol_nufft: float = 1e-8,
+                   reg_param: float = 1e-12,
+                   eps_finufft: float = 1e-12,
+                   precond_shift: float = 1e-3,
+                   kde_oversample: int = 4,
+                   kde_bandwidth: float = 1.0,
+                   **kwargs):
     """
     Solve Δu = f on a disk of radius R in polar coords using Fourier-in-θ
     and radial integration (C, D).
 
+    grid_type:
+        1 -> Uniform angular grid in θ (standard FFT).
+        2, 3 -> Shared non-uniform angular grid in θ (NUFFT / NUDFT).
+
     use_nudft_angular:
-        Only used when azu_unif == 0 (nonuniform angles).
+        Only used when grid_type in (2, 3) (nonuniform angles).
         False (default) -> NUFFT + block CG (fast).
         True            -> direct NUDFT solve (dense, reference).
     """
-
 
     # Step 1: angular Fourier coefficients
     f_fourier_coeff, g_fourier_coeff = compute_angular_fourier_coefficients(
         f_values=f_values,
         g_values=g_values,
         theta_j=theta_j,
-        azu_unif=azu_unif,
+        grid_type=grid_type,
         use_nudft_angular=use_nudft_angular,
         maxiter_nufft=maxiter_nufft,
         tol_nufft=tol_nufft,
+        reg_param=reg_param,
+        eps=eps_finufft,
+        precond_shift=precond_shift,
+        kde_oversample=kde_oversample,
+        kde_bandwidth=kde_bandwidth,
     )
-
-
 
     # Step 2: radial integrals C_n and D_n
     C, D = compute_radial_integrals(
@@ -55,7 +66,6 @@ def poisson_solver(f_values, g_values, u_fourier_0,
         quad_rule=quad_rule,
         rad_unif=rad_unif,
     )
-
 
     # Steps 3–4
     v_neg, v_pos = compute_v_neg_pos(C, D, r_m, N, M, quad_rule)
@@ -80,10 +90,8 @@ def poisson_solver(f_values, g_values, u_fourier_0,
         u_fourier_coeff=u_fourier_coeff,
         theta_j=theta_j,
         N=N,
-        azu_unif=azu_unif,
-        eps=1e-12,
+        grid_type=grid_type,
+        eps=eps_finufft,
     )
 
     return u_approx
-
-

@@ -1,121 +1,88 @@
-from openpyxl.chartsheet import relation
-import numpy as np
+import scipy.special as sp_special
 import finufft
+import multiprocessing
+import pyfftw
+import pyfftw.interfaces.numpy_fft as fftw_fft
+pyfftw.interfaces.cache.enable()
+import numpy as np
 
 from .uniform import compute_fourier_coeff_unif
 from .nonuniform import (
     compute_fourier_coeff_nonunif,
-    compute_fourier_coeff_nonunif_perradius,
     _wrap_angles
 )
 
-#-----------------------------------------
+# ---------------------------------------------------------
 # Analysis dispatcher
 # ---------------------------------------------------------
 def compute_angular_fourier_coefficients(f_values: np.ndarray,
                                          g_values: np.ndarray,
                                          theta_j,
-                                         azu_unif: int,
+                                         grid_type: int,
                                          use_nudft_angular: bool = True,
                                          maxiter_nufft: int = 50,
-                                         tol_nufft: float = 1e-8):
+                                         tol_nufft: float = 1e-8,
+                                         reg_param: float = 1e-12,
+                                         eps: float = 1e-12,
+                                         precond_shift: float = 1e-3,
+                                         kde_oversample: int = 4,
+                                         kde_bandwidth: float = 1.0,
+                                         **kwargs):
     """
     Compute angular Fourier coefficients (analysis step) for f and g.
 
-    azu_unif:
-      2 → uniform FFT
-      1 → shared nonuniform mesh, theta_j shape (N,)
-      0 → per-radius nonuniform mesh, theta_j shape (N, M)
+    grid_type:
+      1 → uniform FFT
+      2, 3 → shared nonuniform mesh, theta_j shape (N,)
     """
     f_values = np.asarray(f_values)
     g_values = np.asarray(g_values)
 
-    if azu_unif == 2:
+    if grid_type == 1:
         # Uniform angles → standard FFT-based coefficients
         f_fc = compute_fourier_coeff_unif(f_values)
         g_fc = compute_fourier_coeff_unif(g_values)
         return f_fc, g_fc
 
-    elif azu_unif == 1:
+    elif grid_type in (2, 3):
         # Nonuniform but shared mesh: theta_j is 1D of length N
         theta = np.asarray(theta_j, dtype=float)
         if theta.ndim != 1 or theta.size != f_values.shape[0]:
             raise ValueError(
-                "For azu_unif == 1, theta_j must be 1D of length N "
+                "For grid_type 2 or 3, theta_j must be 1D of length N "
                 "matching the first dimension of f_values"
             )
 
-        f_fc = compute_fourier_coeff_nonunif(
-            f_values,
+        # Unified Batching of [f, g] into a single NUFFT/NUDFT solve
+        is_f_1d = (f_values.ndim == 1)
+        is_g_1d = (g_values.ndim == 1)
+        f_arr = f_values[:, None] if is_f_1d else f_values
+        g_arr = g_values[:, None] if is_g_1d else g_values
+
+        M_f = f_arr.shape[1]
+        combined = np.ascontiguousarray(np.hstack([f_arr, g_arr]))
+
+        combined_fc = compute_fourier_coeff_nonunif(
+            combined,
             theta,
+            grid_type=grid_type,
             maxiter=maxiter_nufft,
             tol=tol_nufft,
             use_nudft=use_nudft_angular,
-        )
-        g_fc = compute_fourier_coeff_nonunif(
-            g_values,
-            theta,
-            maxiter=maxiter_nufft,
-            tol=tol_nufft,
-            use_nudft=use_nudft_angular,
-        )
-        return f_fc, g_fc
-
-    elif azu_unif == 0:
-        # Fully nonuniform: theta_j is (N, M), different mesh at each radius.
-        theta = np.asarray(theta_j, dtype=float)
-
-        if f_values.ndim != 2:
-            raise ValueError("For azu_unif == 0, f_values must have shape (N, M)")
-
-        N, M = f_values.shape
-        if theta.shape != (N, M):
-            raise ValueError(
-                f"For azu_unif == 0, theta_j must have shape (N, M) = ({N}, {M}), "
-                f"got {theta.shape}"
-            )
-
-        # f: full grid (N, M) → per-radius NUDFT/NUFFT
-        f_fc = compute_fourier_coeff_nonunif_perradius(
-            f_values,
-            theta,
-            maxiter=maxiter_nufft,
-            tol=tol_nufft,
-            use_nudft=use_nudft_angular,
+            reg_param=reg_param,
+            eps=eps,
         )
 
-        # g: boundary data only on r = R, typically shape (N,)
-        # use the angular mesh at the outer radius (last column of theta)
-        if g_values.ndim == 1:
-            if g_values.shape[0] != N:
-                raise ValueError(
-                    "For azu_unif == 0 with 1D g_values, length must be N"
-                )
-            g_fc = compute_fourier_coeff_nonunif(
-                g_values,
-                theta[:, -1],
-                maxiter=maxiter_nufft,
-                tol=tol_nufft,
-                use_nudft=use_nudft_angular,
-            )
-        else:
-            # If you ever store g on all radii as (N, M), you can also do per-radius here.
-            if g_values.shape != (N, M):
-                raise ValueError(
-                    "g_values must be either (N,) or (N,M) when azu_unif == 0"
-                )
-            g_fc = compute_fourier_coeff_nonunif_perradius(
-                g_values,
-                theta,
-                maxiter=maxiter_nufft,
-                tol=tol_nufft,
-                use_nudft=use_nudft_angular,
-            )
+        f_fc = combined_fc[:, :M_f]
+        g_fc = combined_fc[:, M_f:]
 
-        return f_fc, g_fc
+        return (f_fc[:, 0] if is_f_1d else f_fc), (g_fc[:, 0] if is_g_1d else g_fc)
 
     else:
-        raise ValueError('Incorrect index for "azu_unif"')
+        raise ValueError(
+            f'Incorrect index for "grid_type": {grid_type}. '
+            'Supported values are 1 (uniform), 2, 3 (nonuniform).'
+        )
 
 
 # ---------------------------------------------------------
@@ -124,12 +91,11 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
 def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
                                     theta_j,
                                     N: int,
-                                    azu_unif: int,
+                                    grid_type: int,
                                     eps: float = 1e-12) -> np.ndarray:
     """
-    azu_unif == 2: uniform IFFT
-    azu_unif == 1: shared nonuniform, NUFFT-2, theta_j (N,)
-    azu_unif == 0: per-radius nonuniform, NUFFT-2 loop, theta_j (N, M)
+    grid_type == 1: uniform IFFT
+    grid_type in (2, 3): shared nonuniform, NUFFT-2, theta_j (N,)
     """
     u_fourier_coeff = np.asarray(u_fourier_coeff)
     Np1, M = u_fourier_coeff.shape
@@ -138,37 +104,30 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
 
     halfN = N // 2
 
-    if azu_unif == 2:
+    if grid_type == 1:
+        n_threads = multiprocessing.cpu_count()
+        
         coeff    = np.vstack([u_fourier_coeff[halfN:N, :],
                               u_fourier_coeff[0:halfN, :]])
-        u_approx = np.fft.ifft(coeff, axis=0) * N
+        u_approx = fftw_fft.ifft(coeff, axis=0, threads=n_threads) * N
         return u_approx
 
-    elif azu_unif == 1:
+    elif grid_type in (2, 3):
         theta = np.asarray(theta_j, dtype=float)
         if theta.ndim != 1 or theta.size != N:
-            raise ValueError("theta_j must be 1D of length N when azu_unif == 1")
+            raise ValueError("theta_j must be 1D of length N when grid_type in (2, 3)")
         x        = np.ascontiguousarray(_wrap_angles(theta))
         coeff    = u_fourier_coeff[:N, :].copy()
+        coeff[0, :] += u_fourier_coeff[N, :]  # Recombine the split Nyquist mode (k = -N/2 and +N/2)
         coeff_KN = np.ascontiguousarray(coeff.T, dtype=np.complex128)  # (M, N)
         out_KM   = finufft.nufft1d2(x, coeff_KN, isign=+1, eps=eps)   # (M, N)
         return out_KM.T                                                # (N, M)
 
-    elif azu_unif == 0:
-        theta = np.asarray(theta_j, dtype=float)
-        if theta.shape != (N, M):
-            raise ValueError("theta_j must have shape (N, M) when azu_unif == 0")
-        base_coeff = u_fourier_coeff[:N, :].copy()
-        u_approx = np.zeros((N, M), dtype=np.complex128)
-        for ell in range(M):
-            x      = np.ascontiguousarray(_wrap_angles(theta[:, ell]))
-            fj_KN  = base_coeff[:, ell][None, :].astype(np.complex128)
-            out_KM = finufft.nufft1d2(x, fj_KN, isign=+1, eps=eps)    # (1, N)
-            u_approx[:, ell] = out_KM[0, :]
-        return u_approx
-
     else:
-        raise ValueError('Incorrect index for "azu_unif"')
+        raise ValueError(
+            f'Incorrect index for "grid_type": {grid_type}. '
+            'Supported values are 1 (uniform), 2, 3 (nonuniform).'
+        )
 
 
 def compute_u_fourier_coefficients(v: np.ndarray,
@@ -245,9 +204,3 @@ def compute_u_fourier_coefficients(v: np.ndarray,
         u_fourier_coeff[mask, :] = v[mask, :] + B
 
     return u_fourier_coeff
-
-
-
-
-
-

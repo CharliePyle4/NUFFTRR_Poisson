@@ -43,10 +43,22 @@ def generate_nonuniform_azimuthal(N, M, kind="rand", **kwargs):
             thetas[:, ell] = generate_sine_perturbed_azimuthal(
                 N, amplitude=amp, mode=mode
             )
+        elif kind in ("shock_layer", "arctan", "shock"):
+            gamma = kwargs.get("gamma", 0.35)
+            theta_0 = kwargs.get("theta_0", np.pi)
+            thetas[:, ell] = generate_shock_layer_azimuthal(N, gamma=gamma, theta_0=theta_0)
+        elif kind in ("multipole", "multi_pole"):
+            thetas[:, ell] = generate_multipole_azimuthal(N)
+        elif kind in ("fibonacci", "golden_ratio", "quasi_rand"):
+            thetas[:, ell] = generate_fibonacci_azimuthal(N)
+        elif kind in ("warped", "conformal"):
+            thetas[:, ell] = generate_warped_azimuthal(N)
+        elif kind in ("chebyshev", "chebyshev_angular"):
+            thetas[:, ell] = generate_chebyshev_angular_azimuthal(N)
         else:
             raise ValueError(
                 f"Unknown nonuniform kind '{kind}'. "
-                "Valid options are {'rand', 'random', 'stratified_rand', 'jittered', 'clustered', 'sine'}."
+                "Valid options are {'rand', 'random', 'stratified_rand', 'jittered', 'clustered', 'sine', 'shock_layer', 'multipole', 'fibonacci', 'warped', 'chebyshev'}."
             )
     return thetas
 
@@ -74,10 +86,22 @@ def generate_fixed_nonuniform_azimuthal(N, kind="rand", **kwargs):
         amp = kwargs.get("amplitude", 0.4)
         mode = kwargs.get("mode", 2)
         return generate_sine_perturbed_azimuthal(N, amplitude=amp, mode=mode)
+    elif kind in ("shock_layer", "arctan", "shock"):
+        gamma = kwargs.get("gamma", 0.35)
+        theta_0 = kwargs.get("theta_0", np.pi)
+        return generate_shock_layer_azimuthal(N, gamma=gamma, theta_0=theta_0)
+    elif kind in ("multipole", "multi_pole"):
+        return generate_multipole_azimuthal(N)
+    elif kind in ("fibonacci", "golden_ratio", "quasi_rand"):
+        return generate_fibonacci_azimuthal(N)
+    elif kind in ("warped", "conformal"):
+        return generate_warped_azimuthal(N)
+    elif kind in ("chebyshev", "chebyshev_angular"):
+        return generate_chebyshev_angular_azimuthal(N)
     else:
         raise ValueError(
             f"Unknown fixed nonuniform kind '{kind}'. "
-            "Valid options are {'rand', 'random', 'stratified_rand', 'jittered', 'clustered', 'sine'}."
+            "Valid options are {'rand', 'random', 'stratified_rand', 'jittered', 'clustered', 'sine', 'shock_layer', 'multipole', 'fibonacci', 'warped', 'chebyshev'}."
         )
 
 
@@ -161,6 +185,69 @@ def generate_sine_perturbed_azimuthal(N, amplitude=0.4, mode=2):
     return theta
 
 
+def generate_shock_layer_azimuthal(N, gamma=0.85, theta_0=np.pi):
+    """
+    Physics-adapted shock / boundary layer grid using conformal arctan mapping.
+    Concentrates points near theta_0 with layer width controlled by gamma.
+    """
+    j = np.arange(N)
+    xi = 2.0 * np.pi * (j + 0.5) / N
+    d_xi = 0.5 * (xi - theta_0)
+    theta = theta_0 + 2.0 * np.arctan(gamma * np.tan(d_xi))
+    theta = np.mod(theta, 2.0 * np.pi)
+    theta = np.sort(theta)
+    return theta
+
+
+def generate_multipole_azimuthal(N, poles=(2, 4), amps=(0.06, 0.03)):
+    """
+    Compound harmonic multi-pole grid with multiple localized clustering regions.
+    """
+    j = np.arange(N)
+    xi = 2.0 * np.pi * (j + 0.5) / N
+    perturb = sum(amp * np.sin(p * xi) for p, amp in zip(poles, amps))
+    theta = np.mod(xi + perturb, 2.0 * np.pi)
+    theta = np.sort(theta)
+    return theta
+
+
+def generate_fibonacci_azimuthal(N):
+    """
+    Golden Ratio / Fibonacci low-discrepancy quasi-random angular grid.
+    Provably minimizes discrepancy without creating large empty sampling holes.
+    """
+    phi = (np.sqrt(5.0) - 1.0) / 2.0  # ~0.6180339887
+    j = np.arange(N)
+    theta = 2.0 * np.pi * np.mod(j * phi, 1.0)
+    theta = np.sort(theta)
+    return theta
+
+
+def generate_warped_azimuthal(N, eps1=0.08, eps2=-0.04):
+    """
+    Smoothly warped conformal/harmonic geometry grid for deformed boundaries.
+    """
+    j = np.arange(N)
+    xi = 2.0 * np.pi * (j + 0.5) / N
+    theta = xi + eps1 * np.sin(xi) + eps2 * np.cos(2.0 * xi + 0.5)
+    theta = np.mod(theta, 2.0 * np.pi)
+    theta = np.sort(theta)
+    return theta
+
+
+def generate_chebyshev_angular_azimuthal(N, alpha=0.18):
+    """
+    Smooth conformal Chebyshev angular grid on periodic circle [0, 2π).
+    Clusters points near interfaces (0, π, 2π) while preserving bounded Jacobian.
+    """
+    j = np.arange(N)
+    xi = 2.0 * np.pi * (j + 0.5) / N
+    theta = xi - alpha * np.sin(2.0 * xi)
+    theta = np.mod(theta, 2.0 * np.pi)
+    theta = np.sort(theta)
+    return theta
+
+
 def generate_uniform_radial(M, R):
     iRadius = np.linspace(0.0, R, M)
     return iRadius
@@ -236,7 +323,7 @@ def compute_zero_mode(u_true: np.ndarray, theta_j: np.ndarray, azu_unif: int) ->
             f_values=u_true,
             g_values=u_true[:, -1],
             theta_j=theta_j,
-            azu_unif=azu_unif,
+            grid_type=1 if azu_unif == 2 else 3,
             use_nudft_angular=True
         )
         u_fourier_0 = f_fc[halfN, :]
