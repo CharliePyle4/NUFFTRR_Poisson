@@ -1,5 +1,3 @@
-
-
 import os
 import sys
 import time
@@ -10,6 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from IPython.display import display, HTML
 from tqdm.auto import tqdm
+
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
