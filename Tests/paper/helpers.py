@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from IPython.display import display, HTML
 from tqdm.auto import tqdm
-
+from scipy.interpolate import CubicSpline
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
@@ -65,7 +65,7 @@ def generate_multipole_azimuthal(N, poles=(2, 4), amplitudes=(0.14, 0.08)):
 
 
 def periodic_linear_interpolate(theta_src, values_src, theta_tgt):
-    """Periodic linear interpolation; angular samples occupy axis 0."""
+    """Periodic periodic cubic spline; angular samples occupy axis 0."""
     theta_src = np.asarray(theta_src, dtype=float)
     values_src = np.asarray(values_src)
     if theta_src.ndim != 1 or len(theta_src) != values_src.shape[0]:
@@ -77,6 +77,69 @@ def periodic_linear_interpolate(theta_src, values_src, theta_tgt):
     return np.column_stack([np.interp(theta_tgt, theta_ext, values_ext[:, k])
                             for k in range(values_src.shape[1])])
 
+def periodic_cubic_spline_interpolate(
+    theta_src,
+    values_src,
+    theta_tgt,
+):
+    """
+    Periodic cubic-spline interpolation from distorted angular samples
+    onto target angular positions.
+
+    theta_src:
+        Sorted distorted angular angles, shape (P,).
+
+    values_src:
+        Values sampled at theta_src, shape (P,) or (P, M).
+
+    theta_tgt:
+        Target angles, generally an equispaced Uniform FFT grid.
+    """
+    theta_src = np.asarray(
+        theta_src,
+        dtype=float,
+    )
+
+    values_src = np.asarray(
+        values_src,
+    )
+
+    if theta_src.ndim != 1:
+        raise ValueError("theta_src must be one-dimensional")
+
+    if values_src.shape[0] != len(theta_src):
+        raise ValueError(
+            "values_src must have len(theta_src) entries on axis 0"
+        )
+
+    # Append a periodic copy of the first point.
+    theta_extended = np.r_[
+        theta_src,
+        theta_src[0] + 2.0 * np.pi,
+    ]
+
+    values_extended = np.concatenate(
+        [
+            values_src,
+            values_src[:1],
+        ],
+        axis=0,
+    )
+
+    # Place all evaluation angles in the spline's periodic interval.
+    theta_target_wrapped = np.mod(
+        theta_tgt - theta_src[0],
+        2.0 * np.pi,
+    ) + theta_src[0]
+
+    spline = CubicSpline(
+        theta_extended,
+        values_extended,
+        axis=0,
+        bc_type="periodic",
+    )
+
+    return spline(theta_target_wrapped)
 
 def run_benchmark_case(
     N,
@@ -146,17 +209,17 @@ def run_benchmark_case(
 
     if azu_unif == 2:
         # Uniform FFT pipeline:
-        # distorted measurements -> periodic linear interpolation ->
+        # distorted measurements -> periodic cubic-spline interpolation ->
         # uniform angular target grid.
         theta_solver = generate_uniform_azimuthal(N)
 
-        f_values = periodic_linear_interpolate(
+        f_values = periodic_cubic_spline_interpolate(
             theta_raw,
             f_raw,
             theta_solver,
         )
 
-        g_values = periodic_linear_interpolate(
+        g_values = periodic_cubic_spline_interpolate(
             theta_raw,
             g_raw,
             theta_solver,
@@ -269,8 +332,11 @@ def run_benchmark_case(
 
 def run_all_algorithms_NxM_study(problem, N_values, M_values, poles=(2, 4),
                                   amplitudes=(0.14, 0.08), bc_choice=1, quad_rule=2):
-    algorithms = [("Adapted NUFFT", 1, False), ("Adapted NUDFT", 1, True),
-                  ("Uniform FFT + linear interpolation", 2, False)]
+    algorithms = [
+        ("Adapted NUFFT", 1, False),
+        ("Adapted NUDFT", 1, True),
+        ("Uniform FFT + periodic cubic spline", 2, False),
+    ]
     rows = []
     pbar = tqdm(total=len(N_values)*len(M_values)*len(algorithms),
                 desc="Computing N x M multipole-grid study")
@@ -353,11 +419,11 @@ def plot_adapted_vs_highres_uniform(
         Adapted NUDFT using the same N_adapt distorted measurements.
 
     Bottom-left:
-        Uniform FFT + linear interpolation using the same N_adapt
+        Uniform FFT + periodic cubic spline using the same N_adapt
         distorted measurements.
 
     Bottom-right:
-        Uniform FFT + linear interpolation using N_unif_high
+        Uniform FFT + periodic cubic spline using N_unif_high
         distorted measurements.
 
     The first three cases have the same angular measurement budget.
@@ -591,7 +657,7 @@ def render_combined_runtime_table(df_results):
 
 
 def render_combined_error_table(df_results, value_col="L2_rel"):
-    order = ["Adapted NUFFT", "Adapted NUDFT", "Uniform FFT + linear interpolation"]
+    order = ["Adapted NUFFT", "Adapted NUDFT", "Uniform FFT + periodic cubic spline"]
     pivot = df_results.pivot_table(index="N", columns=["method", "M"], values=value_col, aggfunc="first")
     columns = [(name, M) for name in order for M in sorted(df_results["M"].unique()) if (name, M) in pivot.columns]
     pivot = pivot.reindex(columns=columns).sort_index()
@@ -600,8 +666,8 @@ def render_combined_error_table(df_results, value_col="L2_rel"):
 
 
 def plot_accuracy_from_df(df_results, fixed_M=64, fixed_N=64):
-    colors = {"Adapted NUFFT":"crimson", "Adapted NUDFT":"forestgreen", "Uniform FFT + linear interpolation":"royalblue"}
-    markers = {"Adapted NUFFT":"s--", "Adapted NUDFT":"^-.", "Uniform FFT + linear interpolation":"o-"}
+    colors = {"Adapted NUFFT":"crimson", "Adapted NUDFT":"forestgreen", "Uniform FFT + periodic cubic spline":"royalblue"}
+    markers = {"Adapted NUFFT":"s--", "Adapted NUDFT":"^-.", "Uniform FFT + periodic cubic spline":"o-"}
     fig, axes = plt.subplots(1, 2, figsize=(8, 3.2), sharey=True)
     for method, g in df_results[df_results.M == fixed_M].groupby("method"):
         g = g.sort_values("N"); axes[0].loglog(g.N, g.L2_rel, markers[method], color=colors[method], label=method)
@@ -615,7 +681,7 @@ def plot_accuracy_from_df(df_results, fixed_M=64, fixed_N=64):
 
 
 def plot_accuracy_faceted_by_method(df_results, N_values=None, M_values=None):
-    methods = [m for m in ["Adapted NUFFT", "Adapted NUDFT", "Uniform FFT + linear interpolation"] if m in set(df_results.method)]
+    methods = [m for m in ["Adapted NUFFT", "Adapted NUDFT", "Uniform FFT + periodic cubic spline"] if m in set(df_results.method)]
     N_values = sorted(df_results.N.unique()) if N_values is None else N_values
     M_values = sorted(df_results.M.unique()) if M_values is None else M_values
     fig, axes = plt.subplots(2, len(methods), figsize=(3.5*len(methods), 5), sharey="row", squeeze=False)
@@ -639,7 +705,7 @@ def plot_accuracy_faceted_by_method(df_results, N_values=None, M_values=None):
 def plot_extreme_runtime_2x2(df_results, N_min=None, N_max=None, M_min=None, M_max=None):
     N_min = df_results.N.min() if N_min is None else N_min; N_max = df_results.N.max() if N_max is None else N_max
     M_min = df_results.M.min() if M_min is None else M_min; M_max = df_results.M.max() if M_max is None else M_max
-    colors = {"Adapted NUFFT":"crimson", "Adapted NUDFT":"forestgreen", "Uniform FFT + linear interpolation":"royalblue"}
+    colors = {"Adapted NUFFT":"crimson", "Adapted NUDFT":"forestgreen", "Uniform FFT + periodic cubic spline":"royalblue"}
     specs = [(df_results[df_results.N == N_min], "M", f"N={N_min}: Runtime vs M"),
              (df_results[df_results.N == N_max], "M", f"N={N_max}: Runtime vs M"),
              (df_results[df_results.M == M_min], "N", f"M={M_min}: Runtime vs N"),
