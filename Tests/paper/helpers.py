@@ -353,40 +353,237 @@ def run_all_algorithms_NxM_study(problem, N_values, M_values, poles=(2, 4),
     return pd.DataFrame(rows)
 
 
-def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=32,
+def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=8,
                             poles=(2, 4), amplitudes=(0.14, 0.08)):
+    """
+    Compact journal-style 1 x 3 visualization:
+      (a) exact solution on the disk,
+      (b) structured distorted polar measurement grid,
+      (c) uniform polar FFT target grid.
+
+    Parameters
+    ----------
+    N_adapt : int
+        Number of distorted azimuthal spokes.
+    N_unif : int
+        Number of uniform azimuthal spokes.
+    M : int
+        Number of radial rings, including the outer boundary.
+    """
     R = problem["R"]
-    theta_adapt = generate_multipole_azimuthal(N_adapt, poles, amplitudes)
+
+    # Angular positions for the two polar grids.
+    theta_adapt = generate_multipole_azimuthal(
+        N_adapt, poles, amplitudes
+    )
     theta_unif = generate_uniform_azimuthal(N_unif)
-    fine_theta = np.linspace(0, 2*np.pi, 250, endpoint=False)
-    fine_r = np.linspace(0, R, 120)
+
+    # M radial rings, including the outer boundary r = R.
+    radii = np.linspace(R / M, R, M)
+
+    # Fine disk grid for the exact-solution surface.
+    fine_theta = np.linspace(0, 2 * np.pi, 300, endpoint=False)
+    fine_r = np.linspace(0, R, 160)
     Xf, Yf = generate_cartesian_grid_on_disk(fine_theta, fine_r)
-    fig = plt.figure(figsize=(11, 3.5))
-    ax = fig.add_subplot(1, 3, 1, projection="3d")
-    surf = ax.plot_surface(Xf, Yf, problem["u"](Xf, Yf), cmap="plasma", edgecolor="none")
-    ax.set_title("Exact Multipole Solution")
-    fig.colorbar(surf, ax=ax, shrink=.5, aspect=10)
+    Uf = problem["u"](Xf, Yf)
 
-    ax = fig.add_subplot(1, 3, 2)
-    for rr in np.linspace(.2*R, R, 5):
-        ax.add_patch(Circle((0, 0), rr, fill=False, ec=".82", ls="--", lw=.8))
-    for rr in (.4*R, .7*R, R):
-        ax.scatter(rr*np.cos(theta_unif), rr*np.sin(theta_unif), s=16, c="royalblue",
-                   alpha=.6, label=f"Uniform FFT target grid (N={N_unif})" if rr == R else None)
-        ax.scatter(rr*np.cos(theta_adapt), rr*np.sin(theta_adapt), s=24, c="crimson", marker="^",
-                   alpha=.85, label=f"Structured distorted grid (N={N_adapt})" if rr == R else None)
-    ax.set_aspect("equal"); ax.set_xlim(-1.15*R, 1.15*R); ax.set_ylim(-1.15*R, 1.15*R)
-    ax.set_title("Structured Angular Deformation"); ax.legend(fontsize=8); ax.axis("off")
+    # Use 8-point font consistently.
+    plt.rcParams.update({
+        "font.size": 8,
+        "axes.titlesize": 8,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+    })
 
-    ax = fig.add_subplot(1, 3, 3); rr = .7*R
-    value = lambda th: problem["u"](rr*np.cos(th), rr*np.sin(th))
-    ax.plot(fine_theta, value(fine_theta), "k-", lw=2, label="Exact angular profile")
-    ax.scatter(theta_unif, value(theta_unif), c="royalblue", s=28, label="Uniform target nodes")
-    ax.scatter(theta_adapt, value(theta_adapt), c="crimson", marker="^", s=36,
-               label="Distorted measurement nodes")
-    ax.set_title("Multipole Mode and Node Locations"); ax.set_xlabel(r"$\theta$"); ax.grid(alpha=.4); ax.legend(fontsize=8)
-    plt.tight_layout(); plt.show()
+    # Compact one-row, three-column figure.
+    fig = plt.figure(figsize=(12, 3.8), dpi=150)
 
+    gs = fig.add_gridspec(
+        1,
+        3,
+        width_ratios=[1.22, 1, 1],
+        left=0.045,
+        right=0.985,
+        bottom=0.12,
+        top=0.84,
+        wspace=0.20,
+    )
+
+    # ===============================================================
+    # (a) Exact solution
+    # ===============================================================
+    ax0 = fig.add_subplot(gs[0, 0], projection="3d")
+
+    surf = ax0.plot_surface(
+        Xf,
+        Yf,
+        Uf,
+        cmap="plasma",
+        edgecolor="none",
+        antialiased=True,
+        rcount=120,
+        ccount=180,
+    )
+
+    ax0.set_title(
+        r"(a) Exact multipole solution",
+        fontsize=8,
+        pad=8,
+        fontweight="semibold",
+    )
+
+    ax0.set_xlabel(r"$x$", fontsize=8, labelpad=2)
+    ax0.set_ylabel(r"$y$", fontsize=8, labelpad=2)
+    ax0.set_zlabel("")
+
+    ax0.set_xlim(-R, R)
+    ax0.set_ylim(-R, R)
+    ax0.view_init(elev=27, azim=-52)
+
+    # Make the 3D panel compact without crowding the other subplots.
+    ax0.set_box_aspect((1, 1, 0.58), zoom=1.00)
+
+    ax0.set_xticks([-1, -0.5, 0, 0.5, 1])
+    ax0.set_yticks([-1, -0.5, 0, 0.5, 1])
+
+    # The colorbar provides the solution scale; omit z-axis tick labels.
+    ax0.set_zticks([])
+
+    ax0.tick_params(axis="x", labelsize=8, pad=1)
+    ax0.tick_params(axis="y", labelsize=8, pad=1)
+
+    cbar = fig.colorbar(
+        surf,
+        ax=ax0,
+        shrink=0.62,
+        aspect=22,
+        pad=0.14,
+    )
+
+    cbar.set_label(
+        r"$u(x,y)$",
+        rotation=270,
+        labelpad=8,
+        fontsize=8,
+    )
+    cbar.ax.tick_params(labelsize=8, pad=2)
+
+    # ===============================================================
+    # Helper for polar grid panels
+    # ===============================================================
+    def draw_polar_grid(ax, theta, color, panel_title):
+        circle_theta = np.linspace(0, 2 * np.pi, 600)
+
+        disk = plt.Circle(
+            (0, 0),
+            R,
+            facecolor="0.985",
+            edgecolor="none",
+            zorder=0,
+        )
+        ax.add_patch(disk)
+
+        # Concentric radial rings.
+        for j, r in enumerate(radii):
+            is_boundary = j == len(radii) - 1
+
+            ax.plot(
+                r * np.cos(circle_theta),
+                r * np.sin(circle_theta),
+                color="0.50" if is_boundary else "0.72",
+                lw=1.15 if is_boundary else 0.85,
+                zorder=1,
+            )
+
+        # Azimuthal spokes.
+        for angle in theta:
+            ax.plot(
+                [0, R * np.cos(angle)],
+                [0, R * np.sin(angle)],
+                color=color,
+                lw=0.85,
+                alpha=0.68,
+                zorder=2,
+            )
+
+        # Nodes at all ring/spoke intersections.
+        R_mesh, Theta_mesh = np.meshgrid(radii, theta)
+        x_nodes = R_mesh * np.cos(Theta_mesh)
+        y_nodes = R_mesh * np.sin(Theta_mesh)
+
+        ax.scatter(
+            x_nodes.ravel(),
+            y_nodes.ravel(),
+            s=24,
+            color=color,
+            edgecolors="white",
+            linewidths=0.55,
+            zorder=4,
+        )
+
+        # Center node.
+        ax.scatter(
+            0,
+            0,
+            s=32,
+            color=color,
+            edgecolors="white",
+            linewidths=0.65,
+            zorder=5,
+        )
+
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlim(-1.10 * R, 1.10 * R)
+        ax.set_ylim(-1.10 * R, 1.10 * R)
+
+        ax.set_title(
+            panel_title,
+            fontsize=8,
+            pad=6,
+            fontweight="semibold",
+            linespacing=1.1,
+        )
+
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+    # ===============================================================
+    # (b) Structured distorted grid
+    # ===============================================================
+    ax1 = fig.add_subplot(gs[0, 1])
+
+    draw_polar_grid(
+        ax=ax1,
+        theta=theta_adapt,
+        color="#C6284A",
+        panel_title=(
+            r"(b) Structured distorted grid"
+            "\n"
+            rf"$N_\theta={N_adapt}, \quad N_r={M}$"
+        ),
+    )
+
+    # ===============================================================
+    # (c) Uniform FFT target grid
+    # ===============================================================
+    ax2 = fig.add_subplot(gs[0, 2])
+
+    draw_polar_grid(
+        ax=ax2,
+        theta=theta_unif,
+        color="#3268B8",
+        panel_title=(
+            r"(c) Uniform FFT target grid"
+            "\n"
+            rf"$N_\theta={N_unif}, \quad N_r={M}$"
+        ),
+    )
+
+    plt.show()
 
 def _plot_error_surface(ax, res, title):
     err = np.abs(res["u_true"] - res["u_approx"])
@@ -396,7 +593,6 @@ def _plot_error_surface(ax, res, title):
     ax.set_title(f"{title}\n$L_2$={res['L2_rel']:.2e}", fontsize=8)
     ax.set_xlabel("x", fontsize=8); ax.set_ylabel("y", fontsize=8); ax.set_zlabel("error", fontsize=8)
     return surf
-
 
 
 def plot_adapted_vs_highres_uniform(
@@ -410,24 +606,18 @@ def plot_adapted_vs_highres_uniform(
     bc_choice=1,
 ):
     """
-    Render a 2 x 2 disk-error comparison.
+    Render a 1 x 3 disk-error comparison.
 
-    Top-left:
-        Adapted NUFFT using N_adapt distorted measurements.
+    Plots:
+      (a) Adapted NUFFT using N_adapt distorted measurements directly.
+      (b) Uniform FFT + interpolation using the same N_adapt
+          distorted measurements.
+      (c) Uniform FFT + interpolation using N_unif_high
+          distorted measurements.
 
-    Top-right:
-        Adapted NUDFT using the same N_adapt distorted measurements.
-
-    Bottom-left:
-        Uniform FFT + periodic cubic spline using the same N_adapt
-        distorted measurements.
-
-    Bottom-right:
-        Uniform FFT + periodic cubic spline using N_unif_high
-        distorted measurements.
-
-    The first three cases have the same angular measurement budget.
-    The final case is a higher-data-budget Uniform FFT comparison.
+    Table:
+      Includes Adapted NUFFT, Adapted NUDFT, equal-budget Uniform FFT,
+      and higher-budget Uniform FFT results.
     """
     # --------------------------------------------------------------
     # Low-resolution distorted measurement grid:
@@ -441,7 +631,7 @@ def plot_adapted_vs_highres_uniform(
 
     # --------------------------------------------------------------
     # High-resolution distorted measurement grid:
-    # used only by the final Uniform FFT comparison.
+    # used only by the higher-budget Uniform FFT comparison.
     # --------------------------------------------------------------
     theta_high = generate_multipole_azimuthal(
         N_unif_high,
@@ -450,7 +640,7 @@ def plot_adapted_vs_highres_uniform(
     )
 
     # --------------------------------------------------------------
-    # Case 1: NUFFT directly uses N_adapt distorted samples.
+    # Case 1: Adapted NUFFT directly uses distorted samples.
     # --------------------------------------------------------------
     res_nufft = run_benchmark_case(
         N=N_adapt,
@@ -464,7 +654,8 @@ def plot_adapted_vs_highres_uniform(
     )
 
     # --------------------------------------------------------------
-    # Case 2: NUDFT directly uses the same distorted samples.
+    # Case 2: Adapted NUDFT directly uses the same distorted samples.
+    # This case appears in the table, but not in the 1 x 3 plot.
     # --------------------------------------------------------------
     res_nudft = run_benchmark_case(
         N=N_adapt,
@@ -478,8 +669,7 @@ def plot_adapted_vs_highres_uniform(
     )
 
     # --------------------------------------------------------------
-    # Case 3: Uniform FFT gets the same low-N distorted samples,
-    # then linearly interpolates them onto its uniform target grid.
+    # Case 3: Uniform FFT using the same low-N measurement budget.
     # --------------------------------------------------------------
     res_uniform_equal = run_benchmark_case(
         N=N_adapt,
@@ -493,8 +683,7 @@ def plot_adapted_vs_highres_uniform(
     )
 
     # --------------------------------------------------------------
-    # Case 4: Uniform FFT receives more distorted measurements,
-    # then linearly interpolates them to a higher-resolution uniform grid.
+    # Case 4: Uniform FFT using the higher measurement budget.
     # --------------------------------------------------------------
     res_uniform_high = run_benchmark_case(
         N=N_unif_high,
@@ -507,14 +696,14 @@ def plot_adapted_vs_highres_uniform(
         use_nudft=False,
     )
 
-    cases = [
+    # --------------------------------------------------------------
+    # Three cases shown in the 1 x 3 visualization.
+    # --------------------------------------------------------------
+    plot_cases = [
         (
-            "Adapted NUFFT — direct distorted data",
+            "Adapted NUFFT\n"
+            "direct distorted data",
             res_nufft,
-        ),
-        (
-            "Adapted NUDFT — direct distorted data",
-            res_nudft,
         ),
         (
             "Uniform FFT + interpolation\n"
@@ -529,27 +718,47 @@ def plot_adapted_vs_highres_uniform(
     ]
 
     # --------------------------------------------------------------
-    # Print a concise numerical table for all four cases.
+    # Four cases listed in the summary table.
+    # --------------------------------------------------------------
+    table_cases = [
+        (
+            "Adapted NUFFT — direct distorted data",
+            res_nufft,
+        ),
+        (
+            "Adapted NUDFT — direct distorted data",
+            res_nudft,
+        ),
+        (
+            "Uniform FFT + interpolation — same measurement budget",
+            res_uniform_equal,
+        ),
+        (
+            "Uniform FFT + interpolation — higher measurement budget",
+            res_uniform_high,
+        ),
+    ]
+
+    # --------------------------------------------------------------
+    # Numerical summary table, including NUDFT.
     # --------------------------------------------------------------
     summary_rows = []
 
-    for label, res in cases:
-        summary_rows.append(
-            {
-                "Case": label.replace("\n", " "),
-                "N": res["N"],
-                "M": res["M"],
-                "Relative L2": res["L2_rel"],
-                "Relative Linf": res["Linf_rel"],
-                "Runtime (s)": res["runtime"],
-            }
-        )
+    for label, res in table_cases:
+        summary_rows.append({
+            "Case": label,
+            "N": res["N"],
+            "M": res["M"],
+            "Relative L2": res["L2_rel"],
+            "Relative Linf": res["Linf_rel"],
+            "Runtime (s)": res["runtime"],
+        })
 
     summary_df = pd.DataFrame(summary_rows)
 
-    print("\n" + "=" * 95)
-    print("2 x 2 Disk Error Comparison")
-    print("=" * 95)
+    print("\n" + "=" * 110)
+    print("1 x 3 Disk Error Comparison with NUDFT Table Result")
+    print("=" * 110)
 
     print(
         summary_df.to_string(
@@ -563,35 +772,51 @@ def plot_adapted_vs_highres_uniform(
     )
 
     # --------------------------------------------------------------
-    # Use one common vertical error range across all four surfaces.
-    # This makes the 3D comparison visually honest.
+    # Compute pointwise errors only for the three plotted cases.
     # --------------------------------------------------------------
     all_errors = [
         np.abs(res["u_true"] - res["u_approx"])
-        for _, res in cases
+        for _, res in plot_cases
     ]
 
-    error_max = max(
-        np.max(error)
-        for error in all_errors
-    )
+    error_max = max(np.max(error) for error in all_errors)
 
     if error_max <= 0:
         error_max = 1.0
 
     # --------------------------------------------------------------
-    # Render 2 x 2 error surfaces.
+    # Compact journal-style formatting.
     # --------------------------------------------------------------
-    fig = plt.figure(figsize=(11, 8.0))
+    plt.rcParams.update({
+        "font.size": 8,
+        "axes.titlesize": 8,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+    })
 
+    fig = plt.figure(figsize=(12, 3.8), dpi=150)
+
+    gs = fig.add_gridspec(
+        1,
+        3,
+        left=0.04,
+        right=0.90,
+        bottom=0.08,
+        top=0.84,
+        wspace=0.22,
+    )
+
+    surfaces = []
+
+    # --------------------------------------------------------------
+    # Render the three requested error surfaces.
+    # --------------------------------------------------------------
     for plot_index, ((label, res), error) in enumerate(
-        zip(cases, all_errors),
-        start=1,
+        zip(plot_cases, all_errors)
     ):
         ax = fig.add_subplot(
-            2,
-            2,
-            plot_index,
+            gs[0, plot_index],
             projection="3d",
         )
 
@@ -609,47 +834,64 @@ def plot_adapted_vs_highres_uniform(
             error_plot,
             cmap="inferno",
             edgecolor="none",
+            antialiased=True,
             vmin=0.0,
             vmax=error_max,
+            rcount=min(160, X_plot.shape[0]),
+            ccount=min(160, X_plot.shape[1]),
         )
 
+        surfaces.append(surface)
+
+        ax.set_xlim(-problem["R"], problem["R"])
+        ax.set_ylim(-problem["R"], problem["R"])
         ax.set_zlim(0.0, error_max)
 
+        ax.view_init(elev=28, azim=-52)
+        ax.set_box_aspect((1, 1, 0.55), zoom=1.0)
+
         ax.set_title(
-            f"{label}\n"
-            f"N={res['N']}, M={res['M']}\n"
-            f"$L_2$ = {res['L2_rel']:.2e} | "
-            f"$L_\\infty$ = {res['Linf_rel']:.2e}",
-            fontsize=9,
+            f"({chr(97 + plot_index)}) {label}\n"
+            f"$N={res['N']}, \\; M={res['M']}$\n"
+            f"$L_2={res['L2_rel']:.2e}$, "
+            f"$L_\\infty={res['Linf_rel']:.2e}$",
+            fontsize=8,
+            pad=8,
+            fontweight="semibold",
         )
 
-        ax.set_xlabel("x", fontsize=8)
-        ax.set_ylabel("y", fontsize=8)
-        ax.set_zlabel("Pointwise error", fontsize=8)
+        ax.set_xlabel(r"$x$", fontsize=8, labelpad=1)
+        ax.set_ylabel(r"$y$", fontsize=8, labelpad=1)
 
-        fig.colorbar(
-            surface,
-            ax=ax,
-            shrink=0.5,
-            aspect=10,
-            pad=0.08,
-        )
+        # The shared colorbar communicates the error scale.
+        ax.set_zticks([])
 
-    fig.suptitle(
-        "Equal-Budget Direct Nonuniform Solves vs. "
-        "Uniform FFT Interpolation Pipelines",
-        fontsize=13,
-        y=0.98,
+        ax.tick_params(axis="x", labelsize=7, pad=0)
+        ax.tick_params(axis="y", labelsize=7, pad=0)
+
+    # --------------------------------------------------------------
+    # Shared colorbar for the three plotted surfaces.
+    # --------------------------------------------------------------
+    cbar = fig.colorbar(
+        surfaces[0],
+        ax=fig.axes[:3],
+        shrink=0.70,
+        aspect=20,
+        pad=0.04,
     )
 
-    plt.tight_layout(
-        rect=[0, 0, 1, 0.95]
+    cbar.set_label(
+        "Pointwise error",
+        rotation=270,
+        labelpad=10,
+        fontsize=8,
     )
+    cbar.ax.tick_params(labelsize=7, pad=2)
 
     plt.show()
 
     return summary_df
-
+      
 def render_combined_runtime_table(df_results):
     pivot = df_results.pivot_table(index="N", columns=["method", "M"], values="runtime").sort_index(axis=1)
     display(HTML(pivot.map(lambda v: f"{v:.4f}" if np.isfinite(v) else "—").to_html(classes="table table-bordered text-center")))
