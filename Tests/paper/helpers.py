@@ -25,67 +25,57 @@ from Poisson_Solver.grids import (
 from Poisson_Solver.visualization import compute_error_metrics
 from Poisson_Solver.poisson_solver import poisson_solver
 
+import sympy as sp
+import matplotlib.pyplot as plt
+from scipy.interpolate import CubicSpline
+
 
 # ---------------------------------------------------------
 # Exact Analytical Benchmark with Localized Azimuthal Peak
 # ---------------------------------------------------------
-def get_azimuthal_gaussian_ridge_problem(R=1.0, theta_0=np.pi, sigma=0.05):
+def get_azimuthal_gaussian_ridge_problem(R=1.0, theta_0=np.pi, sigma=0.12):
     """
-    Creates a problem with a sharp Gaussian ridge clustered around a specific angle theta_0.
-    The function is strictly smooth and 2pi-periodic.
-    
-    u(r, theta) = r^2 * (R^2 - r^2) * exp( - (sin((theta - theta_0)/2) / sigma)**2 )
+    Creates a problem with a localized Gaussian ridge.
+    Analytically pre-simplified to prevent floating point blowups at r=0.
     """
     r_sym, th_sym = sp.symbols('r th', real=True)
     
-    # 2pi-periodic localized Gaussian-like peak at theta = theta_0
-    # We use sin((th - th_0)/2) to ensure strict periodicity and smoothness
+    # Angular peak function
     angular_peak = sp.exp(- (sp.sin((th_sym - theta_0) / 2.0) / sigma)**2)
     
-    # Define the exact 2D solution
-    u_sym = r_sym**2 * (R**2 - r_sym**2) * angular_peak
-    
-    # Compute symbolic Laplacian in polar coordinates
-    # \Delta u = u_rr + (1/r)u_r + (1/r^2)u_{theta, theta}
-    u_r = sp.diff(u_sym, r_sym)
-    u_rr = sp.diff(u_r, r_sym)
-    u_th = sp.diff(u_sym, th_sym)
-    u_thth = sp.diff(u_th, th_sym)
-    
-    lap_sym = u_rr + (u_r / r_sym) + (u_thth / r_sym**2)
-    
-    # Lambdify for fast numerical evaluation
-    u_func = sp.lambdify((r_sym, th_sym), u_sym, "numpy")
-    lap_func = sp.lambdify((r_sym, th_sym), lap_sym, "numpy")
+    # Pre-calculate the exact angular derivatives
+    peak_func = sp.lambdify(th_sym, angular_peak, "numpy")
+    peak_thth_func = sp.lambdify(th_sym, sp.diff(angular_peak, th_sym, 2), "numpy")
 
     def u_true(xc, yc):
         r = np.sqrt(xc**2 + yc**2)
         th = np.arctan2(yc, xc)
-        return u_func(r, th)
+        return r**2 * (R**2 - r**2) * peak_func(th)
 
     def f_rhs(xc, yc):
         r = np.sqrt(xc**2 + yc**2)
-        # Avoid division by zero at origin (the r^2 term cancels the 1/r^2 in the Laplacian)
-        # For evaluation, a tiny offset at the origin is safe because it goes to 0 anyway.
-        r = np.maximum(r, 1e-14) 
         th = np.arctan2(yc, xc)
-        return lap_func(r, th)
+        
+        # ANALYTICALLY SIMPLIFIED LAPLACIAN (No division by r!)
+        # Delta u = u_rr + u_r/r + u_thth/r^2
+        # Since u = r^2(R^2 - r^2)*P(th), the 1/r^2 cancels perfectly.
+        radial_part = (4.0 * R**2 - 16.0 * r**2) * peak_func(th)
+        angular_part = (R**2 - r**2) * peak_thth_func(th)
+        
+        return radial_part + angular_part
 
     def g_dirichlet(xc, yc):
         return np.zeros_like(xc)
-        
+
     def g_neumann(xc, yc, R_val=R):
-        # Radial derivative at r=R for u(r,theta) = r^2(R^2-r^2)*Peak
-        # is -2 * R^3 * Peak
         thc = np.arctan2(yc, xc)
-        peak = np.exp(- (np.sin((thc - theta_0) / 2.0) / sigma)**2)
-        return -2.0 * (R_val**3) * peak
+        return -2.0 * R_val**3 * peak_func(thc)
 
     return {
         "u": u_true,
         "f": f_rhs,
         "g_dirichlet": g_dirichlet,
-        "g_neumann": g_neumann,   # <--- Added this line
+        "g_neumann": g_neumann,
         "R": R,
         "sigma": sigma,
         "theta_0": theta_0
@@ -113,73 +103,151 @@ def generate_adapted_clustered_azimuthal(N, cluster_strength=0.40, center=np.pi)
     theta = np.mod(theta, 2.0 * np.pi)
     return np.sort(theta)
 
-
 # ---------------------------------------------------------
-# Single Case Solver Harness
+# Periodic 1-D linear interpolation helper
 # ---------------------------------------------------------
-def run_benchmark_case(N, M, azu_unif, theta_j, problem,
-                       bc_choice=1, quad_rule=2, use_nudft=False,
-                       maxiter_nufft=100, tol_nufft=1e-10):
+def periodic_linear_interpolate(theta_src, values_src, theta_tgt):
     """
-    Solves the 2D Poisson equation on the disk using a uniform radial grid
-    and the specified azimuthal grid (uniform or non-uniform).
+    Periodically interpolates `values_src` sampled at sorted `theta_src`
+    (length P) onto `theta_tgt` (length Q).
+
+    • theta_src, theta_tgt are 1-D arrays in [0, 2π).
+    • values_src can be shape (P,) or (P, K).
     """
-    R = problem["R"]
-    u_true = problem["u"]
-    f_rhs = problem["f"]
-    g_dir = problem["g_dirichlet"]
-    g_neu = problem["g_neumann"]
+    theta_src  = np.asarray(theta_src,  dtype=float)
+    values_src = np.asarray(values_src)
 
-    iRadius = generate_uniform_radial(M, R)
-    iAngle = np.asarray(theta_j, dtype=float)
+    # Build periodic extension (prepend and append one point)
+    theta_ext  = np.concatenate(
+        ([theta_src[-1] - 2.0*np.pi], theta_src, [theta_src[0] + 2.0*np.pi])
+    )
+    if values_src.ndim == 1:
+        values_ext = np.concatenate(([values_src[-1]], values_src, [values_src[0]]))
+        return np.interp(theta_tgt, theta_ext, values_ext)
 
-    x_coord, y_coord = generate_cartesian_grid_on_disk(iAngle, iRadius)
-    f_values = f_rhs(x_coord, y_coord)
-    u_t = u_true(x_coord, y_coord)
+    # 2-D (P × K): extend along first axis
+    values_ext = np.concatenate(
+        (values_src[-1:, :], values_src, values_src[:1, :]),
+        axis=0
+    )
+    return np.vstack([
+        np.interp(theta_tgt, theta_ext, values_ext[:, k])
+        for k in range(values_ext.shape[1])
+    ]).T          # return shape (Q, K)
+
+
+# ======================================================================
+# 1)  run_benchmark_case  – correct grid handling, timing, interpolation
+# ======================================================================
+def run_benchmark_case(
+        N, M,
+        azu_unif,            # 1 = NUFFT / NUDFT   | 2 = Uniform FFT (+interp)
+        theta_j,
+        problem,
+        bc_choice=1, quad_rule=2,
+        use_nudft=False,
+        maxiter_nufft=100, tol_nufft=1e-10,
+        cluster_strength=0.40, theta_0=np.pi):
+    """
+    Solve the Poisson problem on a disk.
+
+    • Uniform radial grid of size M.
+    • `theta_j` is the clustered angular grid where the data are *measured*.
+    • If `azu_unif == 2`, the routine interpolates those measurements to a
+      uniform θ grid before calling the Uniform-FFT solver.
+    """
+
+    # ---------- unpack benchmark problem ----------
+    R         = problem["R"]
+    u_true_f  = problem["u"]
+    f_rhs_f   = problem["f"]
+    g_dir_f   = problem["g_dirichlet"]
+    g_neu_f   = problem["g_neumann"]
+
+    # ---------- grids ----------
+    r_m       = generate_uniform_radial(M, R)              # always uniform
+    theta_raw = np.asarray(theta_j, dtype=float)           # measurement angles
+
+    # Cartesian coords on measurement grid (for sampling RHS)
+    x_raw, y_raw = generate_cartesian_grid_on_disk(theta_raw, r_m)
+
+    # ---------- acquire scattered data ----------
+    f_raw = f_rhs_f(x_raw, y_raw)
 
     if bc_choice == 1:
-        g_values = g_dir(x_coord[:, M - 1], y_coord[:, M - 1])
+        g_raw = g_dir_f(x_raw[:, -1], y_raw[:, -1])
     else:
-        g_values = g_neu(x_coord[:, M - 1], y_coord[:, M - 1], R)
+        g_raw = g_neu_f(x_raw[:, -1], y_raw[:, -1], R)
 
-    # --- FIX: Constrain the zero-mode for Non-Uniform azimuthal grids ---
-    # Non-uniform angular mappings can alias the global integral, causing a constant shift in the solution.
-    # We must explicitly pin the m=0 mode at the boundary to prevent this.
+    # ========= start timing *before* any interpolation =========
+    t0 = time.perf_counter()
+
+    # ---------- uniform FFT path needs gridding / interpolation ----------
+    if azu_unif == 2:
+        theta_uniform = generate_uniform_azimuthal(N)
+
+        # Interpolate all radial rings at once.
+        f_values = periodic_linear_interpolate(
+            theta_raw,
+            f_raw,
+            theta_uniform,
+        )
+
+        g_values = periodic_linear_interpolate(
+            theta_raw,
+            g_raw,
+            theta_uniform,
+        )
+        theta_solver = theta_uniform
+    else:
+        # NUFFT / NUDFT: consume data directly
+        f_values     = f_raw
+        g_values     = g_raw
+        theta_solver = theta_raw
+
+    # ---------- exact solution on *solver* grid (for error) ----------
+    x_sol, y_sol = generate_cartesian_grid_on_disk(theta_solver, r_m)
+    u_ref_solver = u_true_f(x_sol, y_sol)
+
+    # ---------- zero-mode constraint ----------
     if bc_choice == 2 or azu_unif == 1:
-        u_fourier_0_arr = compute_zero_mode(u_t, iAngle, azu_unif)
+        u_fourier_0_arr = compute_zero_mode(
+            u_ref_solver, theta_solver, azu_unif
+        )
         u_fourier_0 = u_fourier_0_arr[-1]
     else:
         u_fourier_0 = np.array([])
-    # --------------------------------------------------------------------
 
-    t0 = time.perf_counter()
+    # ---------- solve ----------
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         u_approx = poisson_solver(
             f_values=f_values,
             g_values=g_values,
             u_fourier_0=u_fourier_0,
-            N=N,
-            M=M,
-            r_m=iRadius,
-            theta_j=iAngle,
+            N=N, M=M,
+            r_m=r_m,
+            theta_j=theta_solver,
             R=R,
             quad_rule=quad_rule,
             BC_choice=bc_choice,
-            rad_unif=1,               # radial grid is always uniform here
+            rad_unif=1,
             azu_unif=azu_unif,
             grid_type=(1 if azu_unif == 2 else 3),
             use_nudft_angular=use_nudft,
             maxiter_nufft=maxiter_nufft,
             tol_nufft=tol_nufft,
         )
+
     runtime = time.perf_counter() - t0
 
-    _, linf_rel, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)
+    # ---------- error ----------
+    _, linf_rel, _, l2_rel = compute_error_metrics(
+        u_approx, u_ref_solver, r_m, theta_solver
+    )
 
     return {
-        "N": N,
-        "M": M,
+        "N": N, "M": M,
         "azu_unif": azu_unif,
         "use_nudft": use_nudft,
         "quad_rule": quad_rule,
@@ -188,47 +256,55 @@ def run_benchmark_case(N, M, azu_unif, theta_j, problem,
         "Linf_rel": linf_rel,
         "runtime": runtime,
         "u_approx": u_approx,
-        "u_true": u_t,
-        "x_coord": x_coord,
-        "y_coord": y_coord,
-        "iRadius": iRadius,
-        "iAngle": iAngle
+        "u_true":   u_ref_solver,
+        "x_coord":  x_sol,
+        "y_coord":  y_sol,
+        "iRadius":  r_m,
+        "iAngle":   theta_solver,
     }
 
-
-# ---------------------------------------------------------
-# N vs. M Grid Study for All 3 Algorithms
-# ---------------------------------------------------------
+# ======================================================================
+# 2)  run_all_algorithms_NxM_study  (all methods share same clustered θ)
+# ======================================================================
 def run_all_algorithms_NxM_study(problem, N_values, M_values,
                                  cluster_strength=0.40, theta_0=np.pi,
                                  bc_choice=1, quad_rule=2):
     """
-    Computes the full (N x M) grid evaluations for:
-    1. Adapted NUFFT
-    2. Adapted NUDFT
-    3. Uniform FFT
+    Computes the (N × M) grid for the three angular solvers:
+      1. Adapted NUFFT
+      2. Adapted NUDFT
+      3. Uniform FFT  (uses interpolation step internally)
+    All methods start from the *same* clustered θ grid so that they
+    receive identical data samples.
     """
     algorithms = [
-        ("Adapted NUFFT", 1, False),
-        ("Adapted NUDFT", 1, True),
-        ("Uniform FFT", 2, False)
+        ("Adapted NUFFT",                     1, False),
+        ("Adapted NUDFT",                     1, True),
+        ("Uniform FFT + linear interpolation", 2, False),
     ]
 
     results = []
-    total_runs = len(algorithms) * len(N_values) * len(M_values)
-    pbar = tqdm(total=total_runs, desc="Computing N vs M Grid Matrix", leave=True)
+    total   = len(algorithms) * len(N_values) * len(M_values)
+    pbar = tqdm(total=total, desc="Computing N×M matrix", leave=True)
 
     for method_name, azu_unif, use_nudft in algorithms:
         for N in N_values:
-            if azu_unif == 1:
-                theta = generate_adapted_clustered_azimuthal(N, cluster_strength=cluster_strength, center=theta_0)
-            else:
-                theta = generate_uniform_azimuthal(N)
+            # Build *one* deterministic clustered θ grid for this N
+            theta_clust = generate_adapted_clustered_azimuthal(
+                N, cluster_strength=cluster_strength, center=theta_0
+            )
 
             for M in M_values:
                 res = run_benchmark_case(
-                    N=N, M=M, azu_unif=azu_unif, theta_j=theta,
-                    problem=problem, bc_choice=bc_choice, quad_rule=quad_rule, use_nudft=use_nudft
+                    N=N, M=M,
+                    azu_unif=azu_unif,
+                    theta_j=theta_clust,   # always pass clustered grid
+                    problem=problem,
+                    bc_choice=bc_choice,
+                    quad_rule=quad_rule,
+                    use_nudft=use_nudft,
+                    cluster_strength=cluster_strength,
+                    theta_0=theta_0,
                 )
                 res["method"] = method_name
                 results.append(res)
@@ -236,9 +312,6 @@ def run_all_algorithms_NxM_study(problem, N_values, M_values,
 
     pbar.close()
     return pd.DataFrame(results)
-
-
-
 
 
 # ---------------------------------------------------------
@@ -288,9 +361,9 @@ def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=32,
         x_ad = r_s * np.cos(theta_adapt)
         y_ad = r_s * np.sin(theta_adapt)
         ax2.scatter(x_un, y_un, s=16, color='royalblue', alpha=0.6,
-                    label=f"Uniform (N={N_unif})" if r_s == R else "")
+                    label=f"Uniform FFT target grid (N={N_unif})" if r_s == R else "")
         ax2.scatter(x_ad, y_ad, s=24, color='crimson', marker='^', alpha=0.85,
-                    label=f"Adapted Clustered (N={N_adapt})" if r_s == R else "")
+                    label=f"Scattered measurement grid (N={N_adapt})" if r_s == R else "")
 
     ax2.set_title("Polar Grid Comparison on Disk", fontsize=12)
     ax2.set_aspect("equal")
@@ -321,56 +394,6 @@ def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=32,
 
 
 
-def plot_3x3_disk_error_comparison(problem, N_list=[32, 64, 128], M=64,
-                                   cluster_strength=0.40, theta_0=np.pi,
-                                   quad_rule=2, bc_choice=1):
-    """
-    Renders a 3x3 plot comparing Pointwise Error Surfaces on the disk:
-    Rows: N = 32, N = 64, N = 128
-    Columns: Adapted NUFFT | Adapted NUDFT | Uniform FFT
-    """
-    fig = plt.figure(figsize=(11, 8.5))
-    methods = [
-        ("Adapted NUFFT", 1, False),
-        ("Adapted NUDFT", 1, True),
-        ("Uniform FFT", 2, False)
-    ]
-
-    plot_idx = 1
-    for row_i, N in enumerate(N_list):
-        for col_j, (meth_name, azu_unif, use_nudft) in enumerate(methods):
-            if azu_unif == 1:
-                theta = generate_adapted_clustered_azimuthal(N, cluster_strength=cluster_strength, center=theta_0)
-            else:
-                theta = generate_uniform_azimuthal(N)
-
-            res = run_benchmark_case(
-                N=N, M=M, azu_unif=azu_unif, theta_j=theta,
-                problem=problem, bc_choice=bc_choice, quad_rule=quad_rule, use_nudft=use_nudft
-            )
-
-            ax = fig.add_subplot(len(N_list), 3, plot_idx, projection='3d')
-            err = np.abs(res["u_true"] - res["u_approx"])
-            X = res["x_coord"]
-            Y = res["y_coord"]
-
-            Xp = np.vstack([X, X[0, :]])
-            Yp = np.vstack([Y, Y[0, :]])
-            Ep = np.vstack([err, err[0, :]])
-
-            surf = ax.plot_surface(Xp, Yp, Ep, cmap='inferno', edgecolor='none')
-            ax.set_title(f"{meth_name} (N={N}, M={M})\n$L_2$ Error = {res['L2_rel']:.2e}", fontsize=8)
-            ax.set_xlabel("x", fontsize=8)
-            ax.set_ylabel("y", fontsize=8)
-            ax.set_zlabel("Error", fontsize=8)
-            fig.colorbar(surf, ax=ax, shrink=0.4, aspect=10, pad=0.1)
-
-            plot_idx += 1
-
-    plt.tight_layout()
-    plt.show()
-
-
 def plot_adapted_vs_highres_uniform(problem, N_adapt=32, N_unif_high=256, M=64,
                                     cluster_strength=0.40, theta_0=np.pi,
                                     quad_rule=2, bc_choice=1):
@@ -396,16 +419,31 @@ def plot_adapted_vs_highres_uniform(problem, N_adapt=32, N_unif_high=256, M=64,
     )
 
     # Case 3: High-resolution Uniform FFT
-    th_un_high = generate_uniform_azimuthal(N_unif_high)
+    # Case 3: High-resolution Uniform FFT
+    th_un_high = generate_adapted_clustered_azimuthal(
+        N_unif_high, cluster_strength=cluster_strength, center=theta_0
+    )
     res_unif = run_benchmark_case(
         N=N_unif_high, M=M, azu_unif=2, theta_j=th_un_high, problem=problem,
         bc_choice=bc_choice, quad_rule=quad_rule, use_nudft=False
     )
 
     cases = [
-        (f"Adapted NUFFT (N={N_adapt}, M={M})", res_nufft),
-        (f"Adapted NUDFT (N={N_adapt}, M={M})", res_nudft),
-        (f"Uniform FFT High-Res (N={N_unif_high}, M={M})", res_unif)
+    (
+        f"Adapted NUFFT — direct data\n"
+        f"(N={N_adapt}, M={M})",
+        res_nufft,
+    ),
+    (
+        f"Adapted NUDFT — direct data\n"
+        f"(N={N_adapt}, M={M})",
+        res_nudft,
+    ),
+    (
+        f"Uniform FFT + linear interpolation\n"
+        f"(N={N_unif_high} measurements, M={M})",
+        res_unif,
+    ),
     ]
 
     for i, (title, res) in enumerate(cases, 1):
@@ -474,7 +512,7 @@ def render_combined_error_table(df_results, value_col="L2_rel"):
     method_order = [
         "Adapted NUFFT",
         "Adapted NUDFT",
-        "Uniform FFT",
+        "Uniform FFT + linear interpolation",
     ]
 
     # One row per N; hierarchical columns: method -> M.
@@ -550,12 +588,12 @@ def plot_extreme_runtime_2x2(df_results, N_min=None, N_max=None, M_min=None, M_m
     colors = {
         "Adapted NUFFT": "crimson",
         "Adapted NUDFT": "forestgreen",
-        "Uniform FFT": "royalblue",
+        "Uniform FFT + linear interpolation": "royalblue",
     }
     markers = {
         "Adapted NUFFT": "s-",
         "Adapted NUDFT": "^-",
-        "Uniform FFT": "o-",
+        "Uniform FFT + linear interpolation": "o-",
     }
 
     # Global runtime range for shared y-axis
@@ -659,12 +697,12 @@ def plot_accuracy_from_df(df_results, fixed_M=64, fixed_N=64):
     colors = {
         "Adapted NUFFT": "crimson",
         "Adapted NUDFT": "forestgreen",
-        "Uniform FFT": "royalblue",
+        "Uniform FFT + linear interpolation": "royalblue",
     }
     markers = {
         "Adapted NUFFT": "s--",
         "Adapted NUDFT": "^-.",
-        "Uniform FFT": "o-",
+        "Uniform FFT + linear interpolation": "o-",
     }
 
     # Left: error vs N at fixed M
