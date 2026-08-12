@@ -78,46 +78,193 @@ def periodic_linear_interpolate(theta_src, values_src, theta_tgt):
                             for k in range(values_src.shape[1])])
 
 
-def run_benchmark_case(N, M, azu_unif, theta_j, problem, bc_choice=1, quad_rule=2,
-                       use_nudft=False, maxiter_nufft=100, tol_nufft=1e-10):
-    """Solve from structured distorted measurements; Uniform FFT includes interpolation."""
+def run_benchmark_case(
+    N,
+    M,
+    azu_unif,
+    theta_j,
+    problem,
+    bc_choice=1,
+    quad_rule=2,
+    use_nudft=False,
+    maxiter_nufft=100,
+    tol_nufft=1e-10,
+):
+    """
+    Solve the disk Poisson problem from structured distorted measurements.
+
+    Timed work:
+        - Uniform-grid interpolation, when azu_unif == 2.
+        - Poisson solver execution.
+
+    Untimed work:
+        - Analytical forcing evaluation.
+        - Exact solution evaluation.
+        - Error metric calculation.
+        - Plot-data preparation.
+    """
     R = problem["R"]
+
+    # --------------------------------------------------------------
+    # Build the radial grid and acquire source measurements.
+    # These steps are excluded from timing for every method.
+    # --------------------------------------------------------------
     r_m = generate_uniform_radial(M, R)
-    theta_raw = np.asarray(theta_j, dtype=float)
-    x_raw, y_raw = generate_cartesian_grid_on_disk(theta_raw, r_m)
-    f_raw = problem["f"](x_raw, y_raw)
-    g_raw = (problem["g_dirichlet"](x_raw[:, -1], y_raw[:, -1]) if bc_choice == 1
-             else problem["g_neumann"](x_raw[:, -1], y_raw[:, -1], R))
 
-    t0 = time.perf_counter()
-    if azu_unif == 2:
-        theta_solver = generate_uniform_azimuthal(N)
-        f_values = periodic_linear_interpolate(theta_raw, f_raw, theta_solver)
-        g_values = periodic_linear_interpolate(theta_raw, g_raw, theta_solver)
+    theta_raw = np.asarray(
+        theta_j,
+        dtype=float,
+    )
+
+    x_raw, y_raw = generate_cartesian_grid_on_disk(
+        theta_raw,
+        r_m,
+    )
+
+    f_raw = problem["f"](
+        x_raw,
+        y_raw,
+    )
+
+    if bc_choice == 1:
+        g_raw = problem["g_dirichlet"](
+            x_raw[:, -1],
+            y_raw[:, -1],
+        )
     else:
-        theta_solver, f_values, g_values = theta_raw, f_raw, g_raw
+        g_raw = problem["g_neumann"](
+            x_raw[:, -1],
+            y_raw[:, -1],
+            R,
+        )
 
-    x_sol, y_sol = generate_cartesian_grid_on_disk(theta_solver, r_m)
-    u_true = problem["u"](x_sol, y_sol)
-    u0 = (compute_zero_mode(u_true, theta_solver, azu_unif)[-1]
-          if (bc_choice == 2 or azu_unif == 1) else np.array([]))
+    # --------------------------------------------------------------
+    # Start timing:
+    # interpolation/gridding plus Poisson solve only.
+    # --------------------------------------------------------------
+    t0 = time.perf_counter()
+
+    if azu_unif == 2:
+        # Uniform FFT pipeline:
+        # distorted measurements -> periodic linear interpolation ->
+        # uniform angular target grid.
+        theta_solver = generate_uniform_azimuthal(N)
+
+        f_values = periodic_linear_interpolate(
+            theta_raw,
+            f_raw,
+            theta_solver,
+        )
+
+        g_values = periodic_linear_interpolate(
+            theta_raw,
+            g_raw,
+            theta_solver,
+        )
+
+    else:
+        # Direct NUFFT / NUDFT pipeline:
+        # consume distorted angular measurements directly.
+        theta_solver = theta_raw
+        f_values = f_raw
+        g_values = g_raw
+
+    # --------------------------------------------------------------
+    # Homogeneous Dirichlet boundary condition:
+    #
+    # u(R, theta) = 0, so the boundary zero Fourier mode is exactly 0.
+    #
+    # Uniform FFT retains its existing empty-array convention.
+    # --------------------------------------------------------------
+    if bc_choice == 1:
+        if azu_unif == 1:
+            u_fourier_0 = 0.0
+        else:
+            u_fourier_0 = np.array([])
+
+    else:
+        # Preserve the optional Neumann path.
+        # This is outside the main Dirichlet experiment.
+        x_bc, y_bc = generate_cartesian_grid_on_disk(
+            theta_solver,
+            r_m,
+        )
+
+        u_bc = problem["u"](
+            x_bc,
+            y_bc,
+        )
+
+        u_fourier_0 = compute_zero_mode(
+            u_bc,
+            theta_solver,
+            azu_unif,
+        )[-1]
+
+    # --------------------------------------------------------------
+    # Timed Poisson solve.
+    # --------------------------------------------------------------
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+
         u_approx = poisson_solver(
-            f_values=f_values, g_values=g_values, u_fourier_0=u0, N=N, M=M,
-            r_m=r_m, theta_j=theta_solver, R=R, quad_rule=quad_rule,
-            BC_choice=bc_choice, rad_unif=1, azu_unif=azu_unif,
+            f_values=f_values,
+            g_values=g_values,
+            u_fourier_0=u_fourier_0,
+            N=N,
+            M=M,
+            r_m=r_m,
+            theta_j=theta_solver,
+            R=R,
+            quad_rule=quad_rule,
+            BC_choice=bc_choice,
+            rad_unif=1,
+            azu_unif=azu_unif,
             grid_type=(1 if azu_unif == 2 else 3),
-            use_nudft_angular=use_nudft, maxiter_nufft=maxiter_nufft,
+            use_nudft_angular=use_nudft,
+            maxiter_nufft=maxiter_nufft,
             tol_nufft=tol_nufft,
         )
+
     runtime = time.perf_counter() - t0
-    _, linf_rel, _, l2_rel = compute_error_metrics(u_approx, u_true, r_m, theta_solver)
-    return {"N": N, "M": M, "azu_unif": azu_unif, "use_nudft": use_nudft,
-            "quad_rule": quad_rule, "bc_choice": bc_choice, "L2_rel": l2_rel,
-            "Linf_rel": linf_rel, "runtime": runtime, "u_approx": u_approx,
-            "u_true": u_true, "x_coord": x_sol, "y_coord": y_sol,
-            "iRadius": r_m, "iAngle": theta_solver}
+
+    # --------------------------------------------------------------
+    # Evaluate exact solution and errors outside the timed region.
+    # --------------------------------------------------------------
+    x_sol, y_sol = generate_cartesian_grid_on_disk(
+        theta_solver,
+        r_m,
+    )
+
+    u_true = problem["u"](
+        x_sol,
+        y_sol,
+    )
+
+    _, linf_rel, _, l2_rel = compute_error_metrics(
+        u_approx,
+        u_true,
+        r_m,
+        theta_solver,
+    )
+
+    return {
+        "N": N,
+        "M": M,
+        "azu_unif": azu_unif,
+        "use_nudft": use_nudft,
+        "quad_rule": quad_rule,
+        "bc_choice": bc_choice,
+        "L2_rel": l2_rel,
+        "Linf_rel": linf_rel,
+        "runtime": runtime,
+        "u_approx": u_approx,
+        "u_true": u_true,
+        "x_coord": x_sol,
+        "y_coord": y_sol,
+        "iRadius": r_m,
+        "iAngle": theta_solver,
+    }
 
 
 def run_all_algorithms_NxM_study(problem, N_values, M_values, poles=(2, 4),
@@ -185,40 +332,257 @@ def _plot_error_surface(ax, res, title):
     return surf
 
 
-def plot_3x3_disk_error_comparison(problem, N_list=(32, 64, 128), M=64,
-                                   poles=(2, 4), amplitudes=(0.14, 0.08),
-                                   quad_rule=2, bc_choice=1):
-    methods = [("Adapted NUFFT", 1, False), ("Adapted NUDFT", 1, True),
-               ("Uniform FFT + linear interpolation", 2, False)]
-    fig = plt.figure(figsize=(11, 8.5)); k = 1
-    for N in N_list:
-        theta = generate_multipole_azimuthal(N, poles, amplitudes)
-        for name, azu_unif, use_nudft in methods:
-            res = run_benchmark_case(N, M, azu_unif, theta, problem, bc_choice, quad_rule, use_nudft)
-            ax = fig.add_subplot(len(N_list), 3, k, projection="3d")
-            fig.colorbar(_plot_error_surface(ax, res, f"{name} (N={N}, M={M})"), ax=ax, shrink=.4, aspect=10, pad=.1)
-            k += 1
-    fig.suptitle("Disk Error: Direct Nonuniform Solves vs Uniform FFT + Interpolation", y=.98)
-    plt.tight_layout(rect=(0, 0, 1, .96)); plt.show()
 
+def plot_adapted_vs_highres_uniform(
+    problem,
+    N_adapt=32,
+    N_unif_high=128,
+    M=64,
+    poles=(2, 4),
+    amplitudes=(0.08, 0.04),
+    quad_rule=2,
+    bc_choice=1,
+):
+    """
+    Render a 2 x 2 disk-error comparison.
 
-def plot_adapted_vs_highres_uniform(problem, N_adapt=32, N_unif_high=128, M=64,
-                                    poles=(2, 4), amplitudes=(0.14, 0.08),
-                                    quad_rule=2, bc_choice=1):
-    theta_low = generate_multipole_azimuthal(N_adapt, poles, amplitudes)
-    theta_high = generate_multipole_azimuthal(N_unif_high, poles, amplitudes)
+    Top-left:
+        Adapted NUFFT using N_adapt distorted measurements.
+
+    Top-right:
+        Adapted NUDFT using the same N_adapt distorted measurements.
+
+    Bottom-left:
+        Uniform FFT + linear interpolation using the same N_adapt
+        distorted measurements.
+
+    Bottom-right:
+        Uniform FFT + linear interpolation using N_unif_high
+        distorted measurements.
+
+    The first three cases have the same angular measurement budget.
+    The final case is a higher-data-budget Uniform FFT comparison.
+    """
+    # --------------------------------------------------------------
+    # Low-resolution distorted measurement grid:
+    # shared by NUFFT, NUDFT, and equal-budget Uniform FFT.
+    # --------------------------------------------------------------
+    theta_low = generate_multipole_azimuthal(
+        N_adapt,
+        poles=poles,
+        amplitudes=amplitudes,
+    )
+
+    # --------------------------------------------------------------
+    # High-resolution distorted measurement grid:
+    # used only by the final Uniform FFT comparison.
+    # --------------------------------------------------------------
+    theta_high = generate_multipole_azimuthal(
+        N_unif_high,
+        poles=poles,
+        amplitudes=amplitudes,
+    )
+
+    # --------------------------------------------------------------
+    # Case 1: NUFFT directly uses N_adapt distorted samples.
+    # --------------------------------------------------------------
+    res_nufft = run_benchmark_case(
+        N=N_adapt,
+        M=M,
+        azu_unif=1,
+        theta_j=theta_low,
+        problem=problem,
+        bc_choice=bc_choice,
+        quad_rule=quad_rule,
+        use_nudft=False,
+    )
+
+    # --------------------------------------------------------------
+    # Case 2: NUDFT directly uses the same distorted samples.
+    # --------------------------------------------------------------
+    res_nudft = run_benchmark_case(
+        N=N_adapt,
+        M=M,
+        azu_unif=1,
+        theta_j=theta_low,
+        problem=problem,
+        bc_choice=bc_choice,
+        quad_rule=quad_rule,
+        use_nudft=True,
+    )
+
+    # --------------------------------------------------------------
+    # Case 3: Uniform FFT gets the same low-N distorted samples,
+    # then linearly interpolates them onto its uniform target grid.
+    # --------------------------------------------------------------
+    res_uniform_equal = run_benchmark_case(
+        N=N_adapt,
+        M=M,
+        azu_unif=2,
+        theta_j=theta_low,
+        problem=problem,
+        bc_choice=bc_choice,
+        quad_rule=quad_rule,
+        use_nudft=False,
+    )
+
+    # --------------------------------------------------------------
+    # Case 4: Uniform FFT receives more distorted measurements,
+    # then linearly interpolates them to a higher-resolution uniform grid.
+    # --------------------------------------------------------------
+    res_uniform_high = run_benchmark_case(
+        N=N_unif_high,
+        M=M,
+        azu_unif=2,
+        theta_j=theta_high,
+        problem=problem,
+        bc_choice=bc_choice,
+        quad_rule=quad_rule,
+        use_nudft=False,
+    )
+
     cases = [
-        ("Adapted NUFFT — direct data", run_benchmark_case(N_adapt, M, 1, theta_low, problem, bc_choice, quad_rule, False)),
-        ("Adapted NUDFT — direct data", run_benchmark_case(N_adapt, M, 1, theta_low, problem, bc_choice, quad_rule, True)),
-        ("Uniform FFT + linear interpolation", run_benchmark_case(N_unif_high, M, 2, theta_high, problem, bc_choice, quad_rule, False)),
+        (
+            "Adapted NUFFT — direct distorted data",
+            res_nufft,
+        ),
+        (
+            "Adapted NUDFT — direct distorted data",
+            res_nudft,
+        ),
+        (
+            "Uniform FFT + interpolation\n"
+            "same measurement budget",
+            res_uniform_equal,
+        ),
+        (
+            "Uniform FFT + interpolation\n"
+            "higher measurement budget",
+            res_uniform_high,
+        ),
     ]
-    fig = plt.figure(figsize=(11, 3.5))
-    for k, (name, res) in enumerate(cases, 1):
-        ax = fig.add_subplot(1, 3, k, projection="3d")
-        fig.colorbar(_plot_error_surface(ax, res, f"{name}\nN={res['N']}, M={M}, t={res['runtime']:.4f}s"), ax=ax, shrink=.5, aspect=10, pad=.1)
-    fig.suptitle("Data-Efficiency Comparison on Structured Distorted Measurements", y=.99)
-    plt.tight_layout(rect=(0, 0, 1, .94)); plt.show()
 
+    # --------------------------------------------------------------
+    # Print a concise numerical table for all four cases.
+    # --------------------------------------------------------------
+    summary_rows = []
+
+    for label, res in cases:
+        summary_rows.append(
+            {
+                "Case": label.replace("\n", " "),
+                "N": res["N"],
+                "M": res["M"],
+                "Relative L2": res["L2_rel"],
+                "Relative Linf": res["Linf_rel"],
+                "Runtime (s)": res["runtime"],
+            }
+        )
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    print("\n" + "=" * 95)
+    print("2 x 2 Disk Error Comparison")
+    print("=" * 95)
+
+    print(
+        summary_df.to_string(
+            index=False,
+            formatters={
+                "Relative L2": lambda value: f"{value:.3e}",
+                "Relative Linf": lambda value: f"{value:.3e}",
+                "Runtime (s)": lambda value: f"{value:.4f}",
+            },
+        )
+    )
+
+    # --------------------------------------------------------------
+    # Use one common vertical error range across all four surfaces.
+    # This makes the 3D comparison visually honest.
+    # --------------------------------------------------------------
+    all_errors = [
+        np.abs(res["u_true"] - res["u_approx"])
+        for _, res in cases
+    ]
+
+    error_max = max(
+        np.max(error)
+        for error in all_errors
+    )
+
+    if error_max <= 0:
+        error_max = 1.0
+
+    # --------------------------------------------------------------
+    # Render 2 x 2 error surfaces.
+    # --------------------------------------------------------------
+    fig = plt.figure(figsize=(11, 8.0))
+
+    for plot_index, ((label, res), error) in enumerate(
+        zip(cases, all_errors),
+        start=1,
+    ):
+        ax = fig.add_subplot(
+            2,
+            2,
+            plot_index,
+            projection="3d",
+        )
+
+        X = res["x_coord"]
+        Y = res["y_coord"]
+
+        # Repeat the first angular row to close the periodic disk rim.
+        X_plot = np.vstack([X, X[0, :]])
+        Y_plot = np.vstack([Y, Y[0, :]])
+        error_plot = np.vstack([error, error[0, :]])
+
+        surface = ax.plot_surface(
+            X_plot,
+            Y_plot,
+            error_plot,
+            cmap="inferno",
+            edgecolor="none",
+            vmin=0.0,
+            vmax=error_max,
+        )
+
+        ax.set_zlim(0.0, error_max)
+
+        ax.set_title(
+            f"{label}\n"
+            f"N={res['N']}, M={res['M']}\n"
+            f"$L_2$ = {res['L2_rel']:.2e} | "
+            f"$L_\\infty$ = {res['Linf_rel']:.2e}",
+            fontsize=9,
+        )
+
+        ax.set_xlabel("x", fontsize=8)
+        ax.set_ylabel("y", fontsize=8)
+        ax.set_zlabel("Pointwise error", fontsize=8)
+
+        fig.colorbar(
+            surface,
+            ax=ax,
+            shrink=0.5,
+            aspect=10,
+            pad=0.08,
+        )
+
+    fig.suptitle(
+        "Equal-Budget Direct Nonuniform Solves vs. "
+        "Uniform FFT Interpolation Pipelines",
+        fontsize=13,
+        y=0.98,
+    )
+
+    plt.tight_layout(
+        rect=[0, 0, 1, 0.95]
+    )
+
+    plt.show()
+
+    return summary_df
 
 def render_combined_runtime_table(df_results):
     pivot = df_results.pivot_table(index="N", columns=["method", "M"], values="runtime").sort_index(axis=1)
