@@ -1,6 +1,4 @@
 import numpy as np
-import finufft
-from pynufft import NUFFT
 
 
 from .fourier.fourier import (
