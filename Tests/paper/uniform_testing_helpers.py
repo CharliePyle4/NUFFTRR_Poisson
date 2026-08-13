@@ -1,5 +1,10 @@
 import os
 import sys
+from pathlib import Path
+REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from IPython.display import display, HTML
 import numpy as np
 import pandas as pd
@@ -220,6 +225,7 @@ def resolve_reg_param(cfg_reg, method, N, M, iAngle=None):
 # Global Config
 # ---------------------------------------------------------
 GLOBAL_CONFIG = {
+    'num_processors': None,
     'R': 1.0,
     'rad_unif': 1,
     'tol_nufft': 1e-10,
@@ -328,13 +334,14 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
                 rad_unif=RAD_UNIF,
                 grid_type=grid_type,
                 use_nudft_angular=nudft_flag,
-                maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
-                tol_nufft=GLOBAL_CONFIG['tol_nufft'],
+                maxiter_nufft=GLOBAL_CONFIG.get('maxiter_nufft', 50), 
+                tol_nufft=GLOBAL_CONFIG.get('tol_nufft', 1e-8),
                 reg_param=actual_reg,
                 eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
                 precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
                 kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
-                kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
+                kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0),
+                num_processors=GLOBAL_CONFIG.get('num_processors', None)
             )
             runtime = time.perf_counter() - t0
 

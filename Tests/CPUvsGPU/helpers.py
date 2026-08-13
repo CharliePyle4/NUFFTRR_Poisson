@@ -1,8 +1,16 @@
 import os
 import sys
+from pathlib import Path
+REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from IPython.display import display, HTML
 import numpy as np
-import cupy as cp
+try:
+    import cupy as cp
+except ImportError:
+    cp = None
 import pandas as pd
 import time
 import warnings
