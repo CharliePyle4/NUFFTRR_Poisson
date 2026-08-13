@@ -993,20 +993,162 @@ def plot_accuracy_faceted_by_method(df_results, N_values=None, M_values=None):
     plt.tight_layout(rect=(0, 0, 1, .95)); plt.show()
 
 
-def plot_extreme_runtime_2x2(df_results, N_min=None, N_max=None, M_min=None, M_max=None):
-    N_min = df_results.N.min() if N_min is None else N_min; N_max = df_results.N.max() if N_max is None else N_max
-    M_min = df_results.M.min() if M_min is None else M_min; M_max = df_results.M.max() if M_max is None else M_max
-    colors = {"Adapted NUFFT":"crimson", "Adapted NUDFT":"forestgreen", "Uniform FFT + periodic cubic spline":"royalblue"}
-    specs = [(df_results[df_results.N == N_min], "M", f"N={N_min}: Runtime vs M"),
-             (df_results[df_results.N == N_max], "M", f"N={N_max}: Runtime vs M"),
-             (df_results[df_results.M == M_min], "N", f"M={M_min}: Runtime vs N"),
-             (df_results[df_results.M == M_max], "N", f"M={M_max}: Runtime vs N")]
-    fig, axes = plt.subplots(2, 2, figsize=(8, 6)); axes = axes.ravel()
-    for ax, (sub, x, title) in zip(axes, specs):
-        for method, g in sub.groupby("method"):
-            g = g.sort_values(x); ax.loglog(g[x], g.runtime, "o-", color=colors.get(method, "black"), label=method)
-        ax.set(title=title, xlabel=f"{x} grid points", ylabel="Runtime (seconds)"); ax.grid(True, which="both", ls="--", alpha=.45)
-    handles, labels = axes[0].get_legend_handles_labels(); fig.legend(handles, labels, loc="upper center", ncol=3, fontsize=8, frameon=False)
-    fig.suptitle("Manufactured Solution on Jittered Angular Grid — Runtime", y=.99)
-    plt.tight_layout(rect=(0, 0, 1, .92)); plt.show()
+def plot_extreme_runtime_2x2(
+    df_results,
+    N_min=None,
+    N_max=None,
+    M_min=None,
+    M_max=None,
+):
+    """
+    Create a journal-style 2 x 2 runtime comparison.
 
+    Top row:
+        Runtime versus radial resolution M at fixed low and high N.
+
+    Bottom row:
+        Runtime versus angular resolution N at fixed low and high M.
+    """
+    N_min = df_results.N.min() if N_min is None else N_min
+    N_max = df_results.N.max() if N_max is None else N_max
+    M_min = df_results.M.min() if M_min is None else M_min
+    M_max = df_results.M.max() if M_max is None else M_max
+
+    colors = {
+        "Adapted NUFFT": "#C6284A",
+        "Adapted NUDFT": "#2E7D32",
+        "Uniform FFT + periodic cubic spline": "#3268B8",
+    }
+
+    labels = {
+        "Adapted NUFFT": "NUFFT",
+        "Adapted NUDFT": "NUDFT",
+        "Uniform FFT + periodic cubic spline": "Uniform FFT + cubic spline",
+    }
+
+    markers = {
+        "Adapted NUFFT": "o",
+        "Adapted NUDFT": "^",
+        "Uniform FFT + periodic cubic spline": "s",
+    }
+
+    specs = [
+        (
+            df_results[df_results.N == N_min],
+            "M",
+            rf"(a) Runtime vs.\ $M$ ($N={N_min}$)",
+        ),
+        (
+            df_results[df_results.N == N_max],
+            "M",
+            rf"(b) Runtime vs.\ $M$ ($N={N_max}$)",
+        ),
+        (
+            df_results[df_results.M == M_min],
+            "N",
+            rf"(c) Runtime vs.\ $N$ ($M={M_min}$)",
+        ),
+        (
+            df_results[df_results.M == M_max],
+            "N",
+            rf"(d) Runtime vs.\ $N$ ($M={M_max}$)",
+        ),
+    ]
+
+    plt.rcParams.update({
+        "font.size": 8,
+        "axes.titlesize": 8,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+    })
+
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(6.8, 5.1),
+        sharey="row",
+    )
+    axes = axes.ravel()
+
+    for index, (ax, (sub, x_var, title)) in enumerate(zip(axes, specs)):
+        for method, group in sub.groupby("method"):
+            group = group.sort_values(x_var)
+
+            ax.loglog(
+                group[x_var],
+                group.runtime,
+                color=colors.get(method, "black"),
+                marker=markers.get(method, "o"),
+                linestyle="-",
+                linewidth=1.35,
+                markersize=4.5,
+                label=labels.get(method, method),
+            )
+
+        ax.set_title(title, pad=5, fontweight="semibold")
+        ax.set_xlabel(
+            rf"${x_var}$ grid points",
+            labelpad=2,
+        )
+
+        # Only label the left-side panels to avoid repeated text.
+        if index in (0, 2):
+            ax.set_ylabel("Runtime (s)", labelpad=2)
+
+        ax.grid(
+            True,
+            which="major",
+            linestyle="--",
+            linewidth=0.55,
+            alpha=0.55,
+        )
+
+        ax.grid(
+            True,
+            which="minor",
+            linestyle=":",
+            linewidth=0.35,
+            alpha=0.35,
+        )
+
+        ax.tick_params(
+            which="both",
+            direction="in",
+            top=True,
+            right=True,
+            pad=2,
+        )
+
+    # Build one clean shared legend below the panels.
+    handles, legend_labels = axes[0].get_legend_handles_labels()
+
+    fig.legend(
+        handles,
+        legend_labels,
+        loc="lower center",
+        ncol=3,
+        fontsize=7,
+        frameon=False,
+        handlelength=2.3,
+        columnspacing=1.8,
+        bbox_to_anchor=(0.5, 0.01),
+    )
+
+    fig.suptitle(
+        "Runtime Scaling on a Jittered Angular Grid",
+        fontsize=9,
+        fontweight="semibold",
+        y=0.98,
+    )
+
+    fig.subplots_adjust(
+        left=0.11,
+        right=0.98,
+        top=0.90,
+        bottom=0.15,
+        wspace=0.20,
+        hspace=0.34,
+    )
+
+    plt.show()
