@@ -12,6 +12,13 @@ import scipy.fft as sp_fft
 # ---------------------------------------------------------
 # Helper Functions
 # ---------------------------------------------------------
+def _resolve_num_processors(num_processors: int = None) -> int:
+    """Resolve num_processors to a valid positive integer, defaulting to os.cpu_count() or 1."""
+    if num_processors is None or num_processors <= 0:
+        return os.cpu_count() or 1
+    return int(num_processors)
+
+
 def _wrap_angles(theta: np.ndarray) -> np.ndarray:
     """Wrap angles to [-π, π) for FINUFFT."""
     return (theta + np.pi) % (2 * np.pi) - np.pi
@@ -32,7 +39,10 @@ def _get_density_weights(theta: np.ndarray) -> np.ndarray:
 
 
 
-def _compute_fft_kde_weights(theta_j: np.ndarray, oversample: int = 4, bandwidth_factor: float = 1.0) -> np.ndarray:
+def _compute_fft_kde_weights(theta_j: np.ndarray,
+                             oversample: int = 4,
+                             bandwidth_factor: float = 1.0,
+                             num_processors: int = None) -> np.ndarray:
     """
     Density compensation via FFT-accelerated KDE on the circle — O(N log N).
 
@@ -60,7 +70,7 @@ def _compute_fft_kde_weights(theta_j: np.ndarray, oversample: int = 4, bandwidth
     kernel = np.exp(-0.5 * (k / sigma) ** 2)
 
     # 3. Circular convolution via FFT -> density at each grid center
-    n_threads = multiprocessing.cpu_count()
+    n_threads = _resolve_num_processors(num_processors)
     density_grid = fftw_fft.irfft(
         fftw_fft.rfft(hist.astype(float), threads=n_threads)
         * fftw_fft.rfft(kernel, threads=n_threads),
@@ -108,40 +118,46 @@ def _pad_coeff_to_Np1(coeff_core: np.ndarray, N: int) -> np.ndarray:
 # ---------------------------------------------------------
 # NUFFT Wrappers
 # ---------------------------------------------------------
-def _nufft_forward(x_wrapped, fhat, eps=1e-12):
+def _nufft_forward(x_wrapped, fhat, eps=1e-12, num_processors: int = None):
+    n_threads = _resolve_num_processors(num_processors)
     x = np.ascontiguousarray(x_wrapped, dtype=float)
     fhat = np.asarray(fhat, dtype=np.complex128)
     if fhat.ndim == 1:
-        return finufft.nufft1d2(x, np.ascontiguousarray(fhat), isign=+1, eps=eps)
+        return finufft.nufft1d2(x, np.ascontiguousarray(fhat), isign=+1, eps=eps, nthreads=n_threads)
     N_modes, K = fhat.shape
     fhat_KN = np.ascontiguousarray(fhat.T, dtype=np.complex128)
-    return finufft.nufft1d2(x, fhat_KN, isign=+1, eps=eps).T
+    return finufft.nufft1d2(x, fhat_KN, isign=+1, eps=eps, nthreads=n_threads).T
 
 
-def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
+def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12, num_processors: int = None):
+    n_threads = _resolve_num_processors(num_processors)
     x = np.ascontiguousarray(x_wrapped, dtype=float)
     f = np.asarray(f, dtype=np.complex128)
     M = x.size
     if f.ndim == 1:
         if f.size != M:
             raise ValueError("x_wrapped length must equal length of f")
-        return finufft.nufft1d1(x, np.ascontiguousarray(f), n_modes=N_modes, isign=-1, eps=eps)
+        return finufft.nufft1d1(x, np.ascontiguousarray(f), n_modes=N_modes, isign=-1, eps=eps, nthreads=n_threads)
     if f.shape[0] != M:
         raise ValueError("x_wrapped length must equal first dim of f")
     f_KM = np.ascontiguousarray(f.T, dtype=np.complex128)
-    return finufft.nufft1d1(x, f_KM, n_modes=N_modes, isign=-1, eps=eps).T
+    return finufft.nufft1d1(x, f_KM, n_modes=N_modes, isign=-1, eps=eps, nthreads=n_threads).T
 
 
 # =============================================================================
 # Direct Unsquared CGLS (Paige & Saunders) — Strategy 2 (Avoids Normal Equations)
 # Solves min ||A c - f||_2 directly without squaring condition numbers.
 # =============================================================================
-def _compute_pipe_menon_weights(theta: np.ndarray, n_iter: int = 2, eps: float = 1e-12) -> np.ndarray:
+def _compute_pipe_menon_weights(theta: np.ndarray,
+                                n_iter: int = 2,
+                                eps: float = 1e-12,
+                                num_processors: int = None) -> np.ndarray:
     """
     Pipe & Menon (1999) Iterative Sampling Density Compensation.
     Computes mathematically optimal weights W via fixed-point sinc iteration:
     w_{k+1} = w_k / (A A^H w_k).
     """
+    n_threads = _resolve_num_processors(num_processors)
     x = _wrap_angles(theta)
     N = theta.size
 
@@ -150,9 +166,9 @@ def _compute_pipe_menon_weights(theta: np.ndarray, n_iter: int = 2, eps: float =
     w = 0.5 * (theta_ext[2:] - theta_ext[:-2]) / (2.0 * np.pi)
 
     # Fast 1D single-transform Guru plans for setup
-    p1 = finufft.Plan(1, (N,), n_trans=1, isign=-1, eps=eps, nthreads=4)
+    p1 = finufft.Plan(1, (N,), n_trans=1, isign=-1, eps=eps, nthreads=n_threads)
     p1.setpts(x)
-    p2 = finufft.Plan(2, (N,), n_trans=1, isign=+1, eps=eps, nthreads=4)
+    p2 = finufft.Plan(2, (N,), n_trans=1, isign=+1, eps=eps, nthreads=n_threads)
     p2.setpts(x)
 
     c = np.empty((1, N), dtype=np.complex128)
@@ -169,11 +185,18 @@ def _compute_pipe_menon_weights(theta: np.ndarray, n_iter: int = 2, eps: float =
     return w_arr.real[0, :]
 
 
-def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-12, **kwargs):
+def _invert_nufft_cgls_unsquared(theta_j,
+                                 f_arr,
+                                 tol=1e-10,
+                                 maxiter=200,
+                                 eps=1e-12,
+                                 num_processors: int = None,
+                                 **kwargs):
     """
     High-Performance Preconditioned Conjugate Gradient for Least Squares (PCGLS).
     Uses persistent FINUFFT Guru Plans and Pipe & Menon optimal spatial weights.
     """
+    n_threads = _resolve_num_processors(num_processors)
     theta = np.asarray(theta_j, dtype=float)
     x = _wrap_angles(theta)
     N = theta.size
@@ -190,10 +213,9 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
     r_T = f_T.copy()  # Spatial residual r = f - A c
 
     # Compute optimal Pipe & Menon weights
-    w = _compute_pipe_menon_weights(theta, n_iter=2, eps=1e-12)[None, :]  # (1, N)
+    w = _compute_pipe_menon_weights(theta, n_iter=2, eps=eps, num_processors=n_threads)[None, :]  # (1, N)
 
     # Initialize FINUFFT Guru Plans once outside the CGLS loop
-    n_threads = min(os.cpu_count() or 4, 8)
     plan1 = finufft.Plan(1, (N,), n_trans=K, isign=-1, eps=eps, nthreads=n_threads)
     plan1.setpts(x)
 
@@ -300,8 +322,18 @@ def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
     return X
 
 
-def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12, reg_param=1e-12,
-                                    precond_shift=1e-3, kde_oversample=4, kde_bandwidth=1.0, **kwargs):
+def _invert_nufft_block_cgls_shared(theta_j,
+                                    f,
+                                    tol=1e-8,
+                                    maxiter=50,
+                                    eps=1e-12,
+                                    reg_param=1e-12,
+                                    precond_shift=1e-3,
+                                    kde_oversample=4,
+                                    kde_bandwidth=1.0,
+                                    num_processors: int = None,
+                                    **kwargs):
+    n_threads = _resolve_num_processors(num_processors)
     theta_j = np.asarray(theta_j, dtype=float)
     f_orig = np.asarray(f, dtype=np.complex128)
     N = theta_j.size
@@ -313,16 +345,19 @@ def _invert_nufft_block_cgls_shared(theta_j, f, tol=1e-8, maxiter=50, eps=1e-12,
         f_arr = f_orig
     N_pts, K = f_arr.shape
 
-    w = _compute_fft_kde_weights(theta_j, oversample=kde_oversample, bandwidth_factor=kde_bandwidth)[:, None]
+    w = _compute_fft_kde_weights(
+        theta_j,
+        oversample=kde_oversample,
+        bandwidth_factor=kde_bandwidth,
+        num_processors=n_threads
+    )[:, None]
 
     # 1. Compute RHS: B_adj = A^H W f  (1 FINUFFT Adjoint)
     f_w = f_arr * w
-    B_adj = _nufft_adjoint(x_wrapped, f_w, N_modes=N, eps=eps).T  # (K, N)
+    B_adj = _nufft_adjoint(x_wrapped, f_w, N_modes=N, eps=eps, num_processors=n_threads).T  # (K, N)
 
     # 2. Compute Toeplitz kernel from weights (1 FINUFFT Adjoint, double resolution)
-    n_threads = multiprocessing.cpu_count()
-
-    v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps)  # (2N,)
+    v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps, num_processors=n_threads)  # (2N,)
     v_shift = fftw_fft.ifftshift(v_raw)
     V_hat = fftw_fft.fft(v_shift, threads=n_threads)[None, :]  # (1, 2N)
     # Pre-allocate aligned arrays and build FFTW plans for T_op
@@ -397,10 +432,15 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
                                   use_nudft: bool = False,
                                   reg_param: float = 1e-12,
                                   eps: float = 1e-12,
+                                  precond_shift: float = 1e-3,
+                                  kde_oversample: int = 4,
+                                  kde_bandwidth: float = 1.0,
+                                  num_processors: int = None,
                                   **kwargs) -> np.ndarray:
     """
     Computes azimuthal Fourier coefficients on non-uniform angular mesh theta_j.
-    Uses Pipe & Menon Unsquared PCGLS for NUFFT or regularized least-squares for NUDFT.
+    Uses Pipe & Menon Unsquared PCGLS for NUFFT (grid_type=3) or Block-CG Toeplitz (grid_type=2)
+    or regularized least-squares for NUDFT.
     """
     f_values = np.asarray(f_values)
     N = f_values.shape[0]
@@ -414,6 +454,10 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
             theta_j, f_values,
             tol=tol, maxiter=maxiter, eps=eps,
             reg_param=reg_param,
+            precond_shift=precond_shift,
+            kde_oversample=kde_oversample,
+            kde_bandwidth=kde_bandwidth,
+            num_processors=num_processors,
             **kwargs
         )
     else:
@@ -421,6 +465,7 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
             theta_j, f_values,
             tol=tol, maxiter=maxiter, eps=eps,
             reg_param=reg_param,
+            num_processors=num_processors,
             **kwargs
         )
 

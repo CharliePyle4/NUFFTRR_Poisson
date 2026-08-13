@@ -15,6 +15,7 @@ def poisson_solver(f_values, g_values, u_fourier_0,
                    precond_shift: float = 1e-3,
                    kde_oversample: int = 4,
                    kde_bandwidth: float = 1.0,
+                   num_processors: int = None,
                    use_gpu: bool = False,
                    **kwargs):
     """
@@ -29,6 +30,10 @@ def poisson_solver(f_values, g_values, u_fourier_0,
         Only used when grid_type in (2, 3) (nonuniform angles).
         False (default) -> NUFFT + block CG (fast).
         True            -> direct NUDFT solve (dense, reference).
+
+    num_processors:
+        Number of threads/processors to use for CPU parallel FFTW / FINUFFT execution.
+        Defaults to None (all available CPU cores).
     """
 
     if use_gpu:
@@ -57,5 +62,6 @@ def poisson_solver(f_values, g_values, u_fourier_0,
         precond_shift=precond_shift,
         kde_oversample=kde_oversample,
         kde_bandwidth=kde_bandwidth,
+        num_processors=num_processors,
         **kwargs
     )

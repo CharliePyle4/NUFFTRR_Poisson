@@ -1,6 +1,5 @@
 import scipy.special as sp_special
 import finufft
-import multiprocessing
 import pyfftw
 import pyfftw.interfaces.numpy_fft as fftw_fft
 pyfftw.interfaces.cache.enable()
@@ -9,7 +8,8 @@ import numpy as np
 from .uniform import compute_fourier_coeff_unif
 from .nonuniform import (
     compute_fourier_coeff_nonunif,
-    _wrap_angles
+    _wrap_angles,
+    _resolve_num_processors,
 )
 
 # ---------------------------------------------------------
@@ -19,7 +19,7 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
                                          g_values: np.ndarray,
                                          theta_j,
                                          grid_type: int,
-                                         use_nudft_angular: bool = True,
+                                         use_nudft_angular: bool = False,
                                          maxiter_nufft: int = 50,
                                          tol_nufft: float = 1e-8,
                                          reg_param: float = 1e-12,
@@ -27,6 +27,7 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
                                          precond_shift: float = 1e-3,
                                          kde_oversample: int = 4,
                                          kde_bandwidth: float = 1.0,
+                                         num_processors: int = None,
                                          **kwargs):
     """
     Compute angular Fourier coefficients (analysis step) for f and g.
@@ -40,8 +41,8 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
 
     if grid_type == 1:
         # Uniform angles → standard FFT-based coefficients
-        f_fc = compute_fourier_coeff_unif(f_values)
-        g_fc = compute_fourier_coeff_unif(g_values)
+        f_fc = compute_fourier_coeff_unif(f_values, num_processors=num_processors)
+        g_fc = compute_fourier_coeff_unif(g_values, num_processors=num_processors)
         return f_fc, g_fc
 
     elif grid_type in (2, 3):
@@ -71,6 +72,11 @@ def compute_angular_fourier_coefficients(f_values: np.ndarray,
             use_nudft=use_nudft_angular,
             reg_param=reg_param,
             eps=eps,
+            precond_shift=precond_shift,
+            kde_oversample=kde_oversample,
+            kde_bandwidth=kde_bandwidth,
+            num_processors=num_processors,
+            **kwargs,
         )
 
         f_fc = combined_fc[:, :M_f]
@@ -92,7 +98,8 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
                                     theta_j,
                                     N: int,
                                     grid_type: int,
-                                    eps: float = 1e-12) -> np.ndarray:
+                                    eps: float = 1e-12,
+                                    num_processors: int = None) -> np.ndarray:
     """
     grid_type == 1: uniform IFFT
     grid_type in (2, 3): shared nonuniform, NUFFT-2, theta_j (N,)
@@ -103,10 +110,9 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
         raise ValueError("u_fourier_coeff must have shape (N+1, M)")
 
     halfN = N // 2
+    n_threads = _resolve_num_processors(num_processors)
 
     if grid_type == 1:
-        n_threads = multiprocessing.cpu_count()
-        
         coeff    = np.vstack([u_fourier_coeff[halfN:N, :],
                               u_fourier_coeff[0:halfN, :]])
         u_approx = fftw_fft.ifft(coeff, axis=0, threads=n_threads) * N
@@ -120,8 +126,8 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
         coeff    = u_fourier_coeff[:N, :].copy()
         coeff[0, :] += u_fourier_coeff[N, :]  # Recombine the split Nyquist mode (k = -N/2 and +N/2)
         coeff_KN = np.ascontiguousarray(coeff.T, dtype=np.complex128)  # (M, N)
-        out_KM   = finufft.nufft1d2(x, coeff_KN, isign=+1, eps=eps)   # (M, N)
-        return out_KM.T                                                # (N, M)
+        out_KM   = finufft.nufft1d2(x, coeff_KN, isign=+1, eps=eps, nthreads=n_threads)  # (M, N)
+        return out_KM.T                                                                 # (N, M)
 
     else:
         raise ValueError(

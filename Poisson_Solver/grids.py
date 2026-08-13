@@ -304,7 +304,11 @@ def generate_grid_values(f, x_coord, y_coord):
 # ---------------------------------------------------------
 # Zero Mode Computation
 # ---------------------------------------------------------
-def compute_zero_mode(u_true: np.ndarray, theta_j: np.ndarray, azu_unif: int) -> np.ndarray:
+def compute_zero_mode(u_true: np.ndarray,
+                      theta_j: np.ndarray,
+                      azu_unif: int,
+                      num_processors: int = None,
+                      **kwargs) -> np.ndarray:
     """
     Computes the 0-th Fourier mode (azimuthal average) of the true solution u_true.
     Uses exact spectral/NUDFT Fourier analysis to avoid O(Δθ^2) quadrature bias on non-uniform grids.
@@ -324,7 +328,9 @@ def compute_zero_mode(u_true: np.ndarray, theta_j: np.ndarray, azu_unif: int) ->
             g_values=u_true[:, -1],
             theta_j=theta_j,
             grid_type=1 if azu_unif == 2 else 3,
-            use_nudft_angular=True
+            use_nudft_angular=True,
+            num_processors=num_processors,
+            **kwargs
         )
         u_fourier_0 = f_fc[halfN, :]
             
