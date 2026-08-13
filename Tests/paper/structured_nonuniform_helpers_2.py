@@ -17,6 +17,7 @@ if REPO_ROOT not in sys.path:
 from Poisson_Solver.grids import (
     generate_uniform_radial,
     generate_uniform_azimuthal,
+    generate_jittered_azimuthal,
     generate_cartesian_grid_on_disk,
     compute_zero_mode,
 )
@@ -51,17 +52,10 @@ def get_single_multipole_problem(R=1.0, mode=12, theta_0=np.pi):
             "R": R, "mode": mode, "theta_0": theta_0}
 
 
-def generate_multipole_azimuthal(N, poles=(2, 4), amplitudes=(0.14, 0.08)):
-    """Structured periodic distortion theta=xi+sum(a_p sin(p xi)); requires sum(|a_p|p)<1."""
-    poles = np.asarray(poles, dtype=float)
-    amplitudes = np.asarray(amplitudes, dtype=float)
-    if poles.ndim != 1 or amplitudes.ndim != 1 or len(poles) != len(amplitudes):
-        raise ValueError("poles and amplitudes must be equal-length 1-D arrays")
-    if np.sum(np.abs(poles) * np.abs(amplitudes)) >= 1.0:
-        raise ValueError("Require sum(abs(poles)*abs(amplitudes)) < 1")
-    xi = 2.0 * np.pi * (np.arange(N) + 0.5) / N
-    theta = xi + sum(a * np.sin(p * xi) for p, a in zip(poles, amplitudes))
-    return np.sort(np.mod(theta, 2.0 * np.pi))
+def generate_jittered_azimuthal_fixed(N, jitter_fraction=0.35, seed=42):
+    """Reproducible jittered azimuthal mesh for benchmark comparisons."""
+    np.random.seed(seed)
+    return generate_jittered_azimuthal(N, jitter_fraction=jitter_fraction)
 
 
 def periodic_linear_interpolate(theta_src, values_src, theta_tgt):
@@ -83,11 +77,11 @@ def periodic_cubic_spline_interpolate(
     theta_tgt,
 ):
     """
-    Periodic cubic-spline interpolation from distorted angular samples
+    Periodic cubic-spline interpolation from nonuniform angular samples
     onto target angular positions.
 
     theta_src:
-        Sorted distorted angular angles, shape (P,).
+        Sorted source angular angles, shape (P,).
 
     values_src:
         Values sampled at theta_src, shape (P,) or (P, M).
@@ -154,7 +148,7 @@ def run_benchmark_case(
     tol_nufft=1e-10,
 ):
     """
-    Solve the disk Poisson problem from structured distorted measurements.
+    Solve the disk Poisson problem from jittered angular measurements.
 
     Timed work:
         - Uniform-grid interpolation, when azu_unif == 2.
@@ -209,7 +203,7 @@ def run_benchmark_case(
 
     if azu_unif == 2:
         # Uniform FFT pipeline:
-        # distorted measurements -> periodic cubic-spline interpolation ->
+        # jittered measurements -> periodic cubic-spline interpolation ->
         # uniform angular target grid.
         theta_solver = generate_uniform_azimuthal(N)
 
@@ -227,7 +221,7 @@ def run_benchmark_case(
 
     else:
         # Direct NUFFT / NUDFT pipeline:
-        # consume distorted angular measurements directly.
+        # consume jittered angular measurements directly.
         theta_solver = theta_raw
         f_values = f_raw
         g_values = g_raw
@@ -283,7 +277,7 @@ def run_benchmark_case(
             BC_choice=bc_choice,
             rad_unif=1,
             azu_unif=azu_unif,
-            grid_type=(1 if azu_unif == 2 else 3),
+            grid_type=(1 if azu_unif == 2 else 2),
             use_nudft_angular=use_nudft,
             maxiter_nufft=maxiter_nufft,
             tol_nufft=tol_nufft,
@@ -330,8 +324,8 @@ def run_benchmark_case(
     }
 
 
-def run_all_algorithms_NxM_study(problem, N_values, M_values, poles=(2, 4),
-                                  amplitudes=(0.14, 0.08), bc_choice=1, quad_rule=2):
+def run_all_algorithms_NxM_study(problem, N_values, M_values, jitter_fraction=0.35,
+                                  grid_seed=42, bc_choice=1, quad_rule=2):
     algorithms = [
         ("Adapted NUFFT", 1, False),
         ("Adapted NUDFT", 1, True),
@@ -339,9 +333,9 @@ def run_all_algorithms_NxM_study(problem, N_values, M_values, poles=(2, 4),
     ]
     rows = []
     pbar = tqdm(total=len(N_values)*len(M_values)*len(algorithms),
-                desc="Computing N x M multipole-grid study")
+                desc="Computing N x M jittered-grid study")
     for N in N_values:
-        theta = generate_multipole_azimuthal(N, poles, amplitudes)
+        theta = generate_jittered_azimuthal_fixed(N, jitter_fraction, grid_seed)
         for M in M_values:
             for name, azu_unif, use_nudft in algorithms:
                 row = run_benchmark_case(N, M, azu_unif, theta, problem, bc_choice,
@@ -354,17 +348,17 @@ def run_all_algorithms_NxM_study(problem, N_values, M_values, poles=(2, 4),
 
 
 def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=8,
-                            poles=(2, 4), amplitudes=(0.14, 0.08)):
+                            jitter_fraction=0.35, grid_seed=42):
     """
     Compact journal-style 1 x 3 visualization:
       (a) exact solution on the disk,
-      (b) structured distorted polar measurement grid,
+      (b) jittered polar measurement grid,
       (c) uniform polar FFT target grid.
 
     Parameters
     ----------
     N_adapt : int
-        Number of distorted azimuthal spokes.
+        Number of jittered azimuthal spokes.
     N_unif : int
         Number of uniform azimuthal spokes.
     M : int
@@ -373,8 +367,8 @@ def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=8,
     R = problem["R"]
 
     # Angular positions for the two polar grids.
-    theta_adapt = generate_multipole_azimuthal(
-        N_adapt, poles, amplitudes
+    theta_adapt = generate_jittered_azimuthal_fixed(
+        N_adapt, jitter_fraction, grid_seed
     )
     theta_unif = generate_uniform_azimuthal(N_unif)
 
@@ -552,7 +546,7 @@ def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=8,
             spine.set_visible(False)
 
     # ===============================================================
-    # (b) Structured distorted grid
+    # (b) Jittered measurement grid
     # ===============================================================
     ax1 = fig.add_subplot(gs[0, 1])
 
@@ -561,7 +555,7 @@ def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=8,
         theta=theta_adapt,
         color="#C6284A",
         panel_title=(
-            r"(b) Structured distorted grid"
+            r"(b) Jittered measurement grid"
             "\n"
             rf"$N_\theta={N_adapt}, \quad N_r={M}$"
         ),
@@ -600,8 +594,8 @@ def plot_adapted_vs_highres_uniform(
     N_adapt=32,
     N_unif_high=128,
     M=64,
-    poles=(2, 4),
-    amplitudes=(0.08, 0.04),
+    jitter_fraction=0.35,
+    grid_seed=42,
     quad_rule=2,
     bc_choice=1,
 ):
@@ -609,38 +603,38 @@ def plot_adapted_vs_highres_uniform(
     Render a 1 x 3 disk-error comparison.
 
     Plots:
-      (a) Adapted NUFFT using N_adapt distorted measurements directly.
+      (a) Adapted NUFFT using N_adapt jittered measurements directly.
       (b) Uniform FFT + interpolation using the same N_adapt
-          distorted measurements.
+          jittered measurements.
       (c) Uniform FFT + interpolation using N_unif_high
-          distorted measurements.
+          jittered measurements.
 
     Table:
       Includes Adapted NUFFT, Adapted NUDFT, equal-budget Uniform FFT,
       and higher-budget Uniform FFT results.
     """
     # --------------------------------------------------------------
-    # Low-resolution distorted measurement grid:
+    # Low-resolution jittered measurement grid:
     # shared by NUFFT, NUDFT, and equal-budget Uniform FFT.
     # --------------------------------------------------------------
-    theta_low = generate_multipole_azimuthal(
+    theta_low = generate_jittered_azimuthal_fixed(
         N_adapt,
-        poles=poles,
-        amplitudes=amplitudes,
+        jitter_fraction=jitter_fraction,
+        seed=grid_seed,
     )
 
     # --------------------------------------------------------------
-    # High-resolution distorted measurement grid:
+    # High-resolution jittered measurement grid:
     # used only by the higher-budget Uniform FFT comparison.
     # --------------------------------------------------------------
-    theta_high = generate_multipole_azimuthal(
+    theta_high = generate_jittered_azimuthal_fixed(
         N_unif_high,
-        poles=poles,
-        amplitudes=amplitudes,
+        jitter_fraction=jitter_fraction,
+        seed=grid_seed,
     )
 
     # --------------------------------------------------------------
-    # Case 1: Adapted NUFFT directly uses distorted samples.
+    # Case 1: Adapted NUFFT directly uses jittered samples.
     # --------------------------------------------------------------
     res_nufft = run_benchmark_case(
         N=N_adapt,
@@ -654,7 +648,7 @@ def plot_adapted_vs_highres_uniform(
     )
 
     # --------------------------------------------------------------
-    # Case 2: Adapted NUDFT directly uses the same distorted samples.
+    # Case 2: Adapted NUDFT directly uses the same jittered samples.
     # This case appears in the table, but not in the 1 x 3 plot.
     # --------------------------------------------------------------
     res_nudft = run_benchmark_case(
@@ -702,7 +696,7 @@ def plot_adapted_vs_highres_uniform(
     plot_cases = [
         (
             "Adapted NUFFT\n"
-            "direct distorted data",
+            "direct jittered data",
             res_nufft,
         ),
         (
@@ -722,11 +716,11 @@ def plot_adapted_vs_highres_uniform(
     # --------------------------------------------------------------
     table_cases = [
         (
-            "Adapted NUFFT — direct distorted data",
+            "Adapted NUFFT — direct jittered data",
             res_nufft,
         ),
         (
-            "Adapted NUDFT — direct distorted data",
+            "Adapted NUDFT — direct jittered data",
             res_nudft,
         ),
         (
@@ -918,7 +912,7 @@ def plot_accuracy_from_df(df_results, fixed_M=64, fixed_N=64):
     axes[0].set(title=f"Error vs N (M={fixed_M})", xlabel="Angular points N", ylabel=r"Relative $L_2$ error")
     axes[1].set(title=f"Error vs M (N={fixed_N})", xlabel="Radial points M")
     for ax in axes: ax.grid(True, which="both", ls="--", alpha=.45); ax.legend(fontsize=7)
-    fig.suptitle("Single Multipole on Structured Distorted Angular Grid — Accuracy", y=1.02)
+    fig.suptitle("Single Multipole on Jittered Angular Grid — Accuracy", y=1.02)
     plt.tight_layout(); plt.show()
 
 
@@ -940,7 +934,7 @@ def plot_accuracy_faceted_by_method(df_results, N_values=None, M_values=None):
         axes[1,col].set(title=f"{method}\nError vs N", xlabel="Angular points N")
         for ax in (axes[0,col], axes[1,col]): ax.grid(True, which="both", ls="--", alpha=.45); ax.legend(fontsize=6)
     axes[0,0].set_ylabel(r"Relative $L_2$ error"); axes[1,0].set_ylabel(r"Relative $L_2$ error")
-    fig.suptitle("Single Multipole on Structured Distorted Angular Grid — Accuracy by Method", y=.99)
+    fig.suptitle("Single Multipole on Jittered Angular Grid — Accuracy by Method", y=.99)
     plt.tight_layout(rect=(0, 0, 1, .95)); plt.show()
 
 
@@ -958,6 +952,6 @@ def plot_extreme_runtime_2x2(df_results, N_min=None, N_max=None, M_min=None, M_m
             g = g.sort_values(x); ax.loglog(g[x], g.runtime, "o-", color=colors.get(method, "black"), label=method)
         ax.set(title=title, xlabel=f"{x} grid points", ylabel="Runtime (seconds)"); ax.grid(True, which="both", ls="--", alpha=.45)
     handles, labels = axes[0].get_legend_handles_labels(); fig.legend(handles, labels, loc="upper center", ncol=3, fontsize=8, frameon=False)
-    fig.suptitle("Single Multipole on Structured Distorted Angular Grid — Runtime", y=.99)
+    fig.suptitle("Single Multipole on Jittered Angular Grid — Runtime", y=.99)
     plt.tight_layout(rect=(0, 0, 1, .92)); plt.show()
 
