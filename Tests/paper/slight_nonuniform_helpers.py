@@ -51,6 +51,61 @@ def get_single_multipole_problem(R=1.0, mode=12, theta_0=np.pi):
     return {"u": u, "f": f, "g_dirichlet": g_dir, "g_neumann": g_neu,
             "R": R, "mode": mode, "theta_0": theta_0}
 
+def get_cartesian_mixed_problem(R=1.0, k=8):
+    """
+    Smooth nonseparable manufactured Dirichlet problem on a disk.
+
+    Exact solution:
+        u(x, y) = (R^2 - x^2 - y^2) exp(x) sin(k y)
+
+    This implementation assumes R = 1 for the analytical forcing
+    written below.
+    """
+    if R != 1.0:
+        raise ValueError(
+            "get_cartesian_mixed_problem currently assumes R = 1.0"
+        )
+
+    def u(x, y):
+        return (
+            (1.0 - x**2 - y**2)
+            * np.exp(x)
+            * np.sin(k * y)
+        )
+
+    def f(x, y):
+        exp_x = np.exp(x)
+        sin_ky = np.sin(k * y)
+        cos_ky = np.cos(k * y)
+
+        return -(
+            (k**2 - 1.0)
+            * (1.0 - x**2 - y**2)
+            * exp_x
+            * sin_ky
+            + 4.0 * exp_x * sin_ky
+            + 4.0 * x * exp_x * sin_ky
+            + 4.0 * k * y * exp_x * cos_ky
+        )
+
+    def g_dir(x, y):
+        return np.zeros_like(x)
+
+    def g_neu(x, y, R_val=R):
+        raise NotImplementedError(
+            "This benchmark is intended for Dirichlet conditions."
+        )
+
+    return {
+        "u": u,
+        "f": f,
+        "g_dirichlet": g_dir,
+        "g_neumann": g_neu,
+        "R": R,
+        "mode": None,
+        "theta_0": None,
+    }
+
 
 def generate_jittered_azimuthal_fixed(N, jitter_fraction=0.35, seed=42):
     """Reproducible jittered azimuthal mesh for benchmark comparisons."""
@@ -421,7 +476,7 @@ def plot_solution_and_grids(problem, N_adapt=32, N_unif=32, M=8,
     )
 
     ax0.set_title(
-        r"(a) Exact multipole solution",
+        r"(a) Exact manufactured solution",
         fontsize=8,
         pad=8,
         fontweight="semibold",
@@ -912,7 +967,7 @@ def plot_accuracy_from_df(df_results, fixed_M=64, fixed_N=64):
     axes[0].set(title=f"Error vs N (M={fixed_M})", xlabel="Angular points N", ylabel=r"Relative $L_2$ error")
     axes[1].set(title=f"Error vs M (N={fixed_N})", xlabel="Radial points M")
     for ax in axes: ax.grid(True, which="both", ls="--", alpha=.45); ax.legend(fontsize=7)
-    fig.suptitle("Single Multipole on Jittered Angular Grid — Accuracy", y=1.02)
+    fig.suptitle("Manufactured Solution on Jittered Angular Grid — Accuracy", y=1.02)
     plt.tight_layout(); plt.show()
 
 
@@ -934,7 +989,7 @@ def plot_accuracy_faceted_by_method(df_results, N_values=None, M_values=None):
         axes[1,col].set(title=f"{method}\nError vs N", xlabel="Angular points N")
         for ax in (axes[0,col], axes[1,col]): ax.grid(True, which="both", ls="--", alpha=.45); ax.legend(fontsize=6)
     axes[0,0].set_ylabel(r"Relative $L_2$ error"); axes[1,0].set_ylabel(r"Relative $L_2$ error")
-    fig.suptitle("Single Multipole on Jittered Angular Grid — Accuracy by Method", y=.99)
+    fig.suptitle("Manufactured Solution on Jittered Angular Grid — Accuracy by Method", y=.99)
     plt.tight_layout(rect=(0, 0, 1, .95)); plt.show()
 
 
@@ -952,6 +1007,6 @@ def plot_extreme_runtime_2x2(df_results, N_min=None, N_max=None, M_min=None, M_m
             g = g.sort_values(x); ax.loglog(g[x], g.runtime, "o-", color=colors.get(method, "black"), label=method)
         ax.set(title=title, xlabel=f"{x} grid points", ylabel="Runtime (seconds)"); ax.grid(True, which="both", ls="--", alpha=.45)
     handles, labels = axes[0].get_legend_handles_labels(); fig.legend(handles, labels, loc="upper center", ncol=3, fontsize=8, frameon=False)
-    fig.suptitle("Single Multipole on Jittered Angular Grid — Runtime", y=.99)
+    fig.suptitle("Manufactured Solution on Jittered Angular Grid — Runtime", y=.99)
     plt.tight_layout(rect=(0, 0, 1, .92)); plt.show()
 
