@@ -193,11 +193,11 @@ def combine_v_neg_pos_to_v(v_neg: cp.ndarray,
                            N: int,
                            M: int) -> cp.ndarray:
     """
-    Combine v^- and v^+ into full v with Hermitian symmetry.
+    Combine v^- and v^+ into full v with Hermitian symmetry on GPU.
 
     Parameters
     ----------
-    v_neg, v_pos : ndarray, shape (N/2+1, M)
+    v_neg, v_pos : cp.ndarray, shape (N/2+1, M)
         Outputs of compute_v_neg_pos.
     r_m : cp.ndarray, shape (M,)
         Radial grid.
@@ -211,18 +211,25 @@ def combine_v_neg_pos_to_v(v_neg: cp.ndarray,
     halfN = N // 2
     v = cp.zeros((N + 1, M), dtype=complex)
 
-    # central mode (k = 0)
+    # Central mode (k = 0, index halfN)
+    # v_0(r) = log(r) * v_0^-(r) + v_0^+(r)
     v[halfN, 0] = v_neg[halfN, 0] + v_pos[0, 0]
     if M > 1:
-        v[halfN, 1:] = cp.log(r_m[1:]) * v_neg[halfN, 1:] + v_pos[0, 1:]
+        log_r = cp.log(r_m[1:])
+        v[halfN, 1:] = log_r * v_neg[halfN, 1:] + v_pos[0, 1:]
 
-    # k = 1..N/2-1 blockwise
-    k_idx = cp.arange(1, halfN)
-    pos_idx = k_idx
-    mir_idx = N - k_idx
-    pos_from = halfN - k_idx
+    # The combination formula is v_k = v_k^- + conj(v_{-k}^+)
+    # For k < 0, we compute directly.
+    # For k > 0, we use Hermitian symmetry v_k = conj(v_{-k}).
+    if halfN > 0:
+        # All negative modes k = -N/2, ..., -1 (indices 0..halfN-1)
+        neg_indices = cp.arange(0, halfN)
+        pos_dual_indices = halfN - neg_indices
+        v[neg_indices, :] = v_neg[neg_indices, :] + cp.conj(v_pos[pos_dual_indices, :])
 
-    v[pos_idx, :] = v_neg[pos_idx, :] + cp.conj(v_pos[pos_from, :])
-    v[mir_idx, :] = cp.conj(v[pos_idx, :])
+        # All positive modes k = 1, ..., N/2 (indices halfN+1..N)
+        pos_indices = cp.arange(halfN + 1, N + 1)
+        neg_dual_indices = N - pos_indices
+        v[pos_indices, :] = cp.conj(v[neg_dual_indices, :])
 
     return v

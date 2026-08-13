@@ -37,31 +37,58 @@ def poisson_solver(f_values, g_values, u_fourier_0,
     """
 
     if use_gpu:
+        import cupy as cp
         from .gpu_solver.poisson_solver import poisson_solver as backend_solver
+        is_numpy_input = isinstance(f_values, np.ndarray)
+        res_gpu = backend_solver(
+            f_values=f_values,
+            g_values=g_values,
+            u_fourier_0=u_fourier_0,
+            N=N,
+            M=M,
+            r_m=r_m,
+            theta_j=theta_j,
+            R=R,
+            quad_rule=quad_rule,
+            BC_choice=BC_choice,
+            rad_unif=rad_unif,
+            grid_type=grid_type,
+            use_nudft_angular=use_nudft_angular,
+            maxiter_nufft=maxiter_nufft,
+            tol_nufft=tol_nufft,
+            reg_param=reg_param,
+            eps_finufft=eps_finufft,
+            precond_shift=precond_shift,
+            kde_oversample=kde_oversample,
+            kde_bandwidth=kde_bandwidth,
+            **kwargs
+        )
+        if is_numpy_input and hasattr(res_gpu, "get"):
+            return res_gpu.get()
+        return res_gpu
     else:
         from .cpu_solver.poisson_solver import poisson_solver as backend_solver
-
-    return backend_solver(
-        f_values=f_values,
-        g_values=g_values,
-        u_fourier_0=u_fourier_0,
-        N=N,
-        M=M,
-        r_m=r_m,
-        theta_j=theta_j,
-        R=R,
-        quad_rule=quad_rule,
-        BC_choice=BC_choice,
-        rad_unif=rad_unif,
-        grid_type=grid_type,
-        use_nudft_angular=use_nudft_angular,
-        maxiter_nufft=maxiter_nufft,
-        tol_nufft=tol_nufft,
-        reg_param=reg_param,
-        eps_finufft=eps_finufft,
-        precond_shift=precond_shift,
-        kde_oversample=kde_oversample,
-        kde_bandwidth=kde_bandwidth,
-        num_processors=num_processors,
-        **kwargs
-    )
+        return backend_solver(
+            f_values=f_values,
+            g_values=g_values,
+            u_fourier_0=u_fourier_0,
+            N=N,
+            M=M,
+            r_m=r_m,
+            theta_j=theta_j,
+            R=R,
+            quad_rule=quad_rule,
+            BC_choice=BC_choice,
+            rad_unif=rad_unif,
+            grid_type=grid_type,
+            use_nudft_angular=use_nudft_angular,
+            maxiter_nufft=maxiter_nufft,
+            tol_nufft=tol_nufft,
+            reg_param=reg_param,
+            eps_finufft=eps_finufft,
+            precond_shift=precond_shift,
+            kde_oversample=kde_oversample,
+            kde_bandwidth=kde_bandwidth,
+            num_processors=num_processors,
+            **kwargs
+        )
