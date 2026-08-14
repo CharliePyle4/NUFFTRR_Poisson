@@ -5,11 +5,16 @@
 
 **NUFFTRR_Poisson** is a fast, accurate, and scalable spectral solver for the 2D Poisson equation on disk domains in polar coordinates:
 
-$$\Delta u = f \quad \text{on } D = \{(r, \theta) : 0 \le r \le R, 0 \le \theta < 2\pi\}$$
+$$
+\Delta u = f \quad \text{on } D = \{(r, \theta), \quad 0 \le r \le R, \quad 0 \le \theta < 2\pi\}
+$$
 
-subject to either **Dirichlet** ($u(R, \theta) = g(\theta)$) or **Neumann** ($\frac{\partial u}{\partial r}(R, \theta) = g(\theta)$) boundary conditions.
+subject to either Dirichlet or Neumann boundary conditions.
 
-The solver employs an azimuthal Fourier modal decomposition coupled with radial integration ($C_n, D_n$) solved via recursive quadrature. It supports both **CPU** (multithreaded FFTW and FINUFFT) and **GPU** (CuPy and cuFINUFFT) backends on **uniform** and **arbitrarily non-uniform** polar grids.
+The solver employs an azimuthal Fourier modal decomposition coupled with radial integration solved via recursive quadrature. It supports both CPU (multithreaded FFTW and FINUFFT) and GPU (CuPy and cuFINUFFT) backends on uniform and non-uniform polar grids.
+
+> [!NOTE]
+> Radial grids can be completely non-uniform. However, azimuthal grids must be shared across all radii.
 
 ---
 
@@ -24,7 +29,7 @@ The solver employs an azimuthal Fourier modal decomposition coupled with radial 
   - **Uniform Radial Grids (`rad_unif=1`)** and **Non-Uniform Radial Grids (`rad_unif=0`)**.
   - Vectorized 1-step Trapezoidal (`quad_rule=1`) and 2-step 3-point Simpson variant (`quad_rule=2`) radial recurrences.
 - **Dual CPU & GPU Backends**:
-  - Switch between CPU and GPU seamlessly with `use_gpu=False` / `use_gpu=True`.
+  - Switch between CPU and GPU with `use_gpu=False` / `use_gpu=True`.
 - **Processor & Thread Allocation**:
   - Control multi-threading via `num_processors` (defaults to all available CPU cores).
 - **Full Parameter Configurability**:
@@ -62,6 +67,8 @@ pip install cupy-cuda11x cufinufft
 ---
 
 ## Quickstart
+
+Please see the two .ipynb files for full customizable examples
 
 ### Example 1: Solving a Dirichlet Problem on a Uniform Grid
 
@@ -202,30 +209,11 @@ def poisson_solver(
 
 ---
 
+
+
 ## Tests Directory
 
-The `Tests/` directory contains comprehensive test suites, benchmarks, convergence studies, and research paper comparisons:
-
-- **`Tests/CPU/`**:
-  - `testing_uniform.ipynb`: Convergence analysis on uniform polar meshes across various problem types.
-  - `testing_slight_nonuniform.ipynb`: Solver accuracy on perturbed / slightly non-uniform angular grids.
-  - `testing_structured_nonuniform.ipynb`: Analysis on structured non-uniform angular meshes.
-  - `testing_badly_nonuniform.ipynb`: Stress tests with extreme angular clustering and gap ratios.
-  - `radial_testing.ipynb`: Radial discretization tests comparing Trapezoidal and Simpson rules.
-  - `neumann_errors.ipynb`: Systematic Neumann boundary condition verification.
-  - `testing_helpers.py`: Core testing harness and benchmark runners.
-- **`Tests/CPUvsGPU/`**:
-  - `gpu_accuracy.ipynb` & `helpers.py`: Direct CPU vs. GPU parity and speedup benchmarks.
-- **`Tests/paper/`**:
-  - Jupyter notebooks and helper scripts generating comparison tables and figures.
-- **`Tests/JCP_Paper_Comparisons/`**:
-  - Benchmarks comparing results directly against published literature (*Journal of Computational Physics*).
-
-You can run any of the notebooks using Jupyter:
-
-```bash
-jupyter notebook Tests/CPU/testing_uniform.ipynb
-```
+The `Tests/` directory contains tests currently being developed for the paper/preprint
 
 ---
 
