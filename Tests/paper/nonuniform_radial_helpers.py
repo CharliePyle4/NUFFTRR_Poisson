@@ -154,7 +154,7 @@ def generate_custom_radial_grid(M, R=1.0, kind="uniform", **kwargs):
     if kind in ("uniform", "equispaced", "linear"):
         return R * xi
     elif kind in ("sinh", "sinh_boundary"):
-        gamma = kwargs.get("gamma", 2.5)
+        gamma = kwargs.get("gamma", 4.5)
         return R * (1.0 - np.sinh(gamma * (1.0 - xi)) / np.sinh(gamma))
     elif kind == "sinh_core":
         gamma = kwargs.get("gamma", 2.5)
@@ -319,7 +319,7 @@ def run_nxm_grid_sweep(problem, N_values, M_values, rad_kinds, quad_rule=2):
 def plot_solution_and_radial_grids(problem, N=32, M=16, primary_kind="sinh", primary_label="Adapted Nonuniform Radial"):
     """
     Journal-style 1 x 3 visualization:
-      (a) Exact solution contour on disk,
+      (a) Exact solution 3D surface plot on disk,
       (b) Uniform radial polar grid,
       (c) Adapted non-uniform radial polar grid.
     """
@@ -343,19 +343,44 @@ def plot_solution_and_radial_grids(problem, N=32, M=16, primary_kind="sinh", pri
     Xf, Yf = generate_cartesian_grid_on_disk(fine_theta, fine_r)
     Uf = problem["u"](Xf, Yf)
 
-    fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.3), dpi=150)
+    fig = plt.figure(figsize=(12, 3.8), dpi=150)
+    gs = fig.add_gridspec(
+        1, 3,
+        width_ratios=[1.22, 1, 1],
+        left=0.045, right=0.985,
+        bottom=0.12, top=0.84,
+        wspace=0.20,
+    )
 
-    # Subplot (a): Exact Solution
-    ax = axes[0]
-    contour = ax.contourf(Xf, Yf, Uf, levels=30, cmap="viridis")
-    ax.add_patch(Circle((0, 0), R, fill=False, ec="black", lw=1.0))
-    cbar = fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.04)
-    cbar.ax.tick_params(labelsize=7)
-    ax.set_title(f"(a) Exact Solution: {problem['name']}")
-    ax.set_aspect("equal")
-    ax.axis("off")
+    # Subplot (a): 3D Exact Solution Surface
+    ax0 = fig.add_subplot(gs[0, 0], projection="3d")
+    surf = ax0.plot_surface(
+        Xf, Yf, Uf,
+        cmap="plasma",
+        edgecolor="none",
+        antialiased=True,
+        rcount=120,
+        ccount=180,
+    )
+    ax0.set_title(f"(a) Exact Solution: {problem['name']}", fontsize=8, pad=8, fontweight="semibold")
+    ax0.set_xlabel(r"$x$", fontsize=8, labelpad=2)
+    ax0.set_ylabel(r"$y$", fontsize=8, labelpad=2)
+    ax0.set_zlabel("")
+    ax0.set_xlim(-R, R)
+    ax0.set_ylim(-R, R)
+    ax0.view_init(elev=27, azim=-52)
+    ax0.set_box_aspect((1, 1, 0.58), zoom=1.00)
+    ax0.set_xticks([-R, -R/2, 0, R/2, R])
+    ax0.set_yticks([-R, -R/2, 0, R/2, R])
+    ax0.set_zticks([])
+    ax0.tick_params(axis="x", labelsize=8, pad=1)
+    ax0.tick_params(axis="y", labelsize=8, pad=1)
 
-    # Helper for grid plotting
+    cbar = fig.colorbar(surf, ax=ax0, shrink=0.62, aspect=22, pad=0.14)
+    cbar.set_label(r"$u(x,y)$", rotation=270, labelpad=8, fontsize=8)
+    cbar.ax.tick_params(labelsize=8, pad=2)
+
+    # Helper for 2D polar grid panels
     def draw_grid_lines(ax_obj, r_vec, title_text, col):
         X, Y = generate_cartesian_grid_on_disk(theta_grid, r_vec)
         for r_val in r_vec[1:]:
@@ -364,17 +389,18 @@ def plot_solution_and_radial_grids(problem, N=32, M=16, primary_kind="sinh", pri
             ax_obj.plot([0, R * np.cos(th)], [0, R * np.sin(th)], color="0.85", lw=0.4)
         ax_obj.scatter(X, Y, s=4, color=col, zorder=3)
         ax_obj.add_patch(Circle((0, 0), R, fill=False, ec="black", lw=1.0))
-        ax_obj.set_title(title_text)
+        ax_obj.set_title(title_text, fontsize=8, fontweight="semibold")
         ax_obj.set_aspect("equal")
         ax_obj.axis("off")
 
     # Subplot (b): Uniform Radial Grid
-    draw_grid_lines(axes[1], r_unif, f"(b) Uniform Radial Grid (M={M})", "#1f77b4")
+    ax1 = fig.add_subplot(gs[0, 1])
+    draw_grid_lines(ax1, r_unif, f"(b) Uniform Radial Grid (M={M})", "#1f77b4")
 
     # Subplot (c): Adapted Radial Grid
-    draw_grid_lines(axes[2], r_nonunif, f"(c) {primary_label} (M={M})", "#d62728")
+    ax2 = fig.add_subplot(gs[0, 2])
+    draw_grid_lines(ax2, r_nonunif, f"(c) {primary_label} (M={M})", "#d62728")
 
-    plt.tight_layout()
     plt.show()
 
 
