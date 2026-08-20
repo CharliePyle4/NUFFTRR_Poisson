@@ -275,6 +275,14 @@ def run_benchmark_case(
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
+        try:
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+        except Exception:
+            pass
+
+        t0 = time.perf_counter()
+
         u_approx = poisson_solver(
             f_values=f_values,
             g_values=g_values,
@@ -294,7 +302,13 @@ def run_benchmark_case(
             tol_nufft=tol_nufft,
         )
 
-    runtime = time.perf_counter() - t0
+        try:
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+        except Exception:
+            pass
+
+        runtime = time.perf_counter() - t0
 
     # --------------------------------------------------------------
     # Evaluate exact solution and errors outside the timed region.

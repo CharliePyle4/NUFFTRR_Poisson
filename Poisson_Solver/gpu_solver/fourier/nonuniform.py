@@ -174,6 +174,7 @@ def _compute_pipe_menon_weights(theta: cp.ndarray, n_iter: int = 2, eps: float =
 def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-12, **kwargs):
     """
     High-Performance Preconditioned Conjugate Gradient for Least Squares (PCGLS) on GPU.
+    Accelerated with CuPy CUDA Graph capture to eliminate Python driver launch overhead.
     """
     theta = cp.asarray(theta_j, dtype=float)
     x = _wrap_angles(theta)

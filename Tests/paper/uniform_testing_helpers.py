@@ -327,6 +327,14 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
                 grid_type = solver_azu
 
         try:
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+        except Exception:
+            pass
+
+        t0 = time.perf_counter()
+
+        try:
             u_approx = poisson_solver(
                 f_values, g_values, u_fourier_0,
                 N, M, iRadius, iAngle, R,
@@ -343,6 +351,13 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
                 kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0),
                 num_processors=GLOBAL_CONFIG.get('num_processors', None)
             )
+
+            try:
+                import cupy as cp
+                cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
+
             runtime = time.perf_counter() - t0
 
             # We only require L_2 relative error metric

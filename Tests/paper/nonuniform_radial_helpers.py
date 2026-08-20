@@ -216,9 +216,17 @@ def run_radial_benchmark_case(
     rad_unif_flag = 1 if is_uniform else 0
 
     # 2. Timed Poisson Solve
-    t0 = time.perf_counter()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+
+        try:
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+        except Exception:
+            pass
+
+        t0 = time.perf_counter()
+
         u_approx = poisson_solver(
             f_values=f_values,
             g_values=g_values,
@@ -234,7 +242,14 @@ def run_radial_benchmark_case(
             grid_type=1,  # Uniform FFT in theta
             num_processors=num_processors,
         )
-    runtime = time.perf_counter() - t0
+
+        try:
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+        except Exception:
+            pass
+
+        runtime = time.perf_counter() - t0
 
     # 3. Exact Solution and Error Metrics
     u_true = problem["u"](x_grid, y_grid)

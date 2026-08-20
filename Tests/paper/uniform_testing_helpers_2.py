@@ -122,7 +122,14 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         u_fourier_0 = np.array([])
 
     try:
+        try:
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+        except Exception:
+            pass
+
         start_time = time.perf_counter()
+
         u_approx = poisson_solver(
             f_values, g_values, u_fourier_0,
             N, M, iRadius, iAngle, R,
@@ -132,6 +139,13 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
             maxiter_nufft=50,
             tol_nufft=1e-8,
         )
+
+        try:
+            import cupy as cp
+            cp.cuda.Stream.null.synchronize()
+        except Exception:
+            pass
+
         solve_time = time.perf_counter() - start_time
 
         _, linf_rel, _, l2_rel = compute_error_metrics(
