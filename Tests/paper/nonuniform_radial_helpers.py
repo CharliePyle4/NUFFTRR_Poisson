@@ -278,6 +278,14 @@ def run_radial_grid_sweep(problem, N, M_values, rad_kinds, quad_rule=2):
     """
     Run M-refinement study across multiple radial mesh choices for a fixed N.
     """
+    # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
+    try:
+        if M_values and rad_kinds:
+            r_warmup = generate_custom_radial_grid(M_values[0], R=problem["R"], kind=rad_kinds[0][0])
+            run_radial_benchmark_case(N=N, M=M_values[0], r_m=r_warmup, problem=problem, rad_kind=rad_kinds[0][1], quad_rule=quad_rule)
+    except Exception:
+        pass
+
     rows = []
     pbar = tqdm(
         total=len(M_values) * len(rad_kinds),
@@ -304,6 +312,14 @@ def run_nxm_grid_sweep(problem, N_values, M_values, rad_kinds, quad_rule=2):
     """
     Run full N x M grid sweep across angular counts N and radial counts M.
     """
+    # Dummy Warmup Solve
+    try:
+        if N_values and M_values and rad_kinds:
+            r_warmup = generate_custom_radial_grid(M_values[0], R=problem["R"], kind=rad_kinds[0][0])
+            run_radial_benchmark_case(N=N_values[0], M=M_values[0], r_m=r_warmup, problem=problem, rad_kind=rad_kinds[0][1], quad_rule=quad_rule)
+    except Exception:
+        pass
+
     rows = []
     pbar = tqdm(
         total=len(N_values) * len(M_values) * len(rad_kinds),

@@ -377,6 +377,13 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
 # Table Generation Pipelines
 # ---------------------------------------------------------
 def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_Table1", mute=False, reg_param=None, **kwargs):
+    # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
+    try:
+        if methods and N_values and M_values:
+            run_case(N_values[0], M_values[0], methods[0], bc_choice=1, quad_rule=1, mute=True, reg_param=reg_param, **kwargs)
+    except Exception:
+        pass
+
     results = []
     method_pbar = tqdm(methods, desc=f"Pipeline ({test_type})", disable=False)
     for method in method_pbar:

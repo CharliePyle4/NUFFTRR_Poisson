@@ -207,6 +207,14 @@ def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
     return x_coord, y_coord, u_approx, u_true
 
 def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+    # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
+    try:
+        if methods and N_values and M_values:
+            run_single_case(N=N_values[0], M=M_values[0], method_cfg=methods[0], bc_name="dirichlet", quad_name="trapezoidal",
+                            u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R)
+    except Exception:
+        pass
+
     table1_results = []
     for method in methods:
         for N in N_values:
@@ -219,6 +227,14 @@ def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MA
     return pd.DataFrame(table1_results)
 
 def run_table_2(methods, N_fixed, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+    # Dummy Warmup Solve
+    try:
+        if methods and M_values:
+            run_single_case(N=N_fixed, M=M_values[0], method_cfg=methods[0], bc_name="dirichlet", quad_name="trapezoidal",
+                            u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R)
+    except Exception:
+        pass
+
     table2_results = []
     for method in methods:
         for M in M_values:

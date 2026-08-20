@@ -405,6 +405,13 @@ def run_all_algorithms_NxM_study(problem, N_values, M_values, jitter_fraction=0.
         ("Adapted NUDFT", 1, True),
         ("Uniform FFT + periodic cubic spline", 2, False),
     ]
+    # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
+    try:
+        th_warmup = generate_jittered_azimuthal_fixed(N_values[0], jitter_fraction, grid_seed)
+        run_benchmark_case(N_values[0], M_values[0], 1, th_warmup, problem, bc_choice, quad_rule, False)
+    except Exception:
+        pass
+
     rows = []
     pbar = tqdm(total=len(N_values)*len(M_values)*len(algorithms),
                 desc="Computing N x M jittered-grid study")

@@ -356,6 +356,13 @@ def run_all_algorithms_NxM_study(problem, N_values, M_values, poles=(2, 4),
         ("Adapted NUDFT", 1, True),
         ("Uniform FFT + periodic cubic spline", 2, False),
     ]
+    # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
+    try:
+        th_warmup = generate_multipole_azimuthal(N_values[0], poles, amplitudes)
+        run_benchmark_case(N_values[0], M_values[0], 1, th_warmup, problem, bc_choice, quad_rule, False)
+    except Exception:
+        pass
+
     rows = []
     pbar = tqdm(total=len(N_values)*len(M_values)*len(algorithms),
                 desc="Computing N x M multipole-grid study")
