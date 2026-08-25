@@ -30,16 +30,18 @@ from Poisson_Solver.poisson_solver import poisson_solver
 
 
 # ==============================================================================
-# Multi-Run Timing Configuration
+# Multi-Run Timing Configuration & Global Backend
 # ==============================================================================
 TIME_TRIALS = False  # Set to True to run each solve 5 times and record min runtime
 NUM_RUNS = 5
+GLOBAL_USE_GPU = False
 
-def set_timing_config(time_trials=False, num_runs=5):
-    """Globally configure multi-trial benchmark timing."""
-    global TIME_TRIALS, NUM_RUNS
+def set_timing_config(time_trials=False, num_runs=5, use_gpu=False):
+    """Globally configure multi-trial benchmark timing and default backend."""
+    global TIME_TRIALS, NUM_RUNS, GLOBAL_USE_GPU
     TIME_TRIALS = bool(time_trials)
     NUM_RUNS = int(num_runs) if time_trials else 1
+    GLOBAL_USE_GPU = bool(use_gpu)
 
 
 def get_single_multipole_problem(R=1.0, mode=12, theta_0=np.pi):
@@ -170,7 +172,15 @@ def run_benchmark_case(
     use_nudft=False,
     maxiter_nufft=100,
     tol_nufft=1e-10,
+    reg_param=1e-12,
+    eps_finufft=1e-12,
+    precond_shift=1e-3,
+    kde_oversample=4,
+    kde_bandwidth=1.0,
+    num_processors=None,
+    use_gpu=None,
     num_runs=None,
+    **kwargs,
 ):
     """
     Solve the disk Poisson problem from structured distorted measurements.
@@ -185,6 +195,7 @@ def run_benchmark_case(
         - Error metric calculation.
         - Plot-data preparation.
     """
+    actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     R = problem["R"]
 
     # --------------------------------------------------------------
@@ -224,7 +235,6 @@ def run_benchmark_case(
     # Start timing:
     # interpolation/gridding plus Poisson solve only.
     # --------------------------------------------------------------
-    t0 = time.perf_counter()
 
     if azu_unif == 2:
         # Uniform FFT pipeline:
@@ -292,11 +302,12 @@ def run_benchmark_case(
 
         runtimes = []
         for _ in range(n_runs):
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
+            if actual_use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
 
             t0 = time.perf_counter()
 
@@ -317,13 +328,22 @@ def run_benchmark_case(
                 use_nudft_angular=use_nudft,
                 maxiter_nufft=maxiter_nufft,
                 tol_nufft=tol_nufft,
+                reg_param=reg_param,
+                eps_finufft=eps_finufft,
+                precond_shift=precond_shift,
+                kde_oversample=kde_oversample,
+                kde_bandwidth=kde_bandwidth,
+                num_processors=num_processors,
+                use_gpu=actual_use_gpu,
+                **kwargs,
             )
 
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
+            if actual_use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
 
             runtimes.append(time.perf_counter() - t0)
 
@@ -368,29 +388,88 @@ def run_benchmark_case(
     }
 
 
-def run_all_algorithms_NxM_study(problem, N_values, M_values, poles=(2, 4),
-                                  amplitudes=(0.14, 0.08), bc_choice=1, quad_rule=2):
+def run_all_algorithms_NxM_study(
+    problem,
+    N_values,
+    M_values,
+    poles=(2, 4),
+    amplitudes=(0.14, 0.08),
+    bc_choice=1,
+    quad_rule=2,
+    maxiter_nufft=100,
+    tol_nufft=1e-10,
+    reg_param=1e-12,
+    eps_finufft=1e-12,
+    precond_shift=1e-3,
+    kde_oversample=4,
+    kde_bandwidth=1.0,
+    num_processors=None,
+    use_gpu=None,
+    num_runs=None,
+    **kwargs,
+):
     algorithms = [
         ("Adapted NUFFT", 1, False),
         ("Adapted NUDFT", 1, True),
         ("Uniform FFT + periodic cubic spline", 2, False),
     ]
+    actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
     try:
         th_warmup = generate_multipole_azimuthal(N_values[0], poles, amplitudes)
-        run_benchmark_case(N_values[0], M_values[0], 1, th_warmup, problem, bc_choice, quad_rule, False)
+        run_benchmark_case(
+            N_values[0],
+            M_values[0],
+            1,
+            th_warmup,
+            problem,
+            bc_choice,
+            quad_rule,
+            False,
+            maxiter_nufft=maxiter_nufft,
+            tol_nufft=tol_nufft,
+            reg_param=reg_param,
+            eps_finufft=eps_finufft,
+            precond_shift=precond_shift,
+            kde_oversample=kde_oversample,
+            kde_bandwidth=kde_bandwidth,
+            num_processors=num_processors,
+            use_gpu=actual_use_gpu,
+            num_runs=num_runs,
+            **kwargs,
+        )
     except Exception:
         pass
 
     rows = []
+    backend_label = "GPU" if actual_use_gpu else "CPU"
     pbar = tqdm(total=len(N_values)*len(M_values)*len(algorithms),
-                desc="Computing N x M multipole-grid study")
+                desc=f"Computing N x M multipole-grid study [{backend_label}]")
     for N in N_values:
         theta = generate_multipole_azimuthal(N, poles, amplitudes)
         for M in M_values:
             for name, azu_unif, use_nudft in algorithms:
-                row = run_benchmark_case(N, M, azu_unif, theta, problem, bc_choice,
-                                         quad_rule, use_nudft)
+                row = run_benchmark_case(
+                    N,
+                    M,
+                    azu_unif,
+                    theta,
+                    problem,
+                    bc_choice,
+                    quad_rule,
+                    use_nudft,
+                    maxiter_nufft=maxiter_nufft,
+                    tol_nufft=tol_nufft,
+                    reg_param=reg_param,
+                    eps_finufft=eps_finufft,
+                    precond_shift=precond_shift,
+                    kde_oversample=kde_oversample,
+                    kde_bandwidth=kde_bandwidth,
+                    num_processors=num_processors,
+                    use_gpu=actual_use_gpu,
+                    num_runs=num_runs,
+                    **kwargs,
+                )
                 row["method"] = name
                 rows.append(row)
                 pbar.update(1)
@@ -649,6 +728,17 @@ def plot_adapted_vs_highres_uniform(
     amplitudes=(0.08, 0.04),
     quad_rule=2,
     bc_choice=1,
+    maxiter_nufft=100,
+    tol_nufft=1e-10,
+    reg_param=1e-12,
+    eps_finufft=1e-12,
+    precond_shift=1e-3,
+    kde_oversample=4,
+    kde_bandwidth=1.0,
+    num_processors=None,
+    use_gpu=None,
+    num_runs=None,
+    **kwargs,
 ):
     """
     Render a 1 x 3 disk-error comparison.
@@ -696,6 +786,17 @@ def plot_adapted_vs_highres_uniform(
         bc_choice=bc_choice,
         quad_rule=quad_rule,
         use_nudft=False,
+        maxiter_nufft=maxiter_nufft,
+        tol_nufft=tol_nufft,
+        reg_param=reg_param,
+        eps_finufft=eps_finufft,
+        precond_shift=precond_shift,
+        kde_oversample=kde_oversample,
+        kde_bandwidth=kde_bandwidth,
+        num_processors=num_processors,
+        use_gpu=use_gpu,
+        num_runs=num_runs,
+        **kwargs,
     )
 
     # --------------------------------------------------------------
@@ -711,6 +812,17 @@ def plot_adapted_vs_highres_uniform(
         bc_choice=bc_choice,
         quad_rule=quad_rule,
         use_nudft=True,
+        maxiter_nufft=maxiter_nufft,
+        tol_nufft=tol_nufft,
+        reg_param=reg_param,
+        eps_finufft=eps_finufft,
+        precond_shift=precond_shift,
+        kde_oversample=kde_oversample,
+        kde_bandwidth=kde_bandwidth,
+        num_processors=num_processors,
+        use_gpu=use_gpu,
+        num_runs=num_runs,
+        **kwargs,
     )
 
     # --------------------------------------------------------------
@@ -725,6 +837,17 @@ def plot_adapted_vs_highres_uniform(
         bc_choice=bc_choice,
         quad_rule=quad_rule,
         use_nudft=False,
+        maxiter_nufft=maxiter_nufft,
+        tol_nufft=tol_nufft,
+        reg_param=reg_param,
+        eps_finufft=eps_finufft,
+        precond_shift=precond_shift,
+        kde_oversample=kde_oversample,
+        kde_bandwidth=kde_bandwidth,
+        num_processors=num_processors,
+        use_gpu=use_gpu,
+        num_runs=num_runs,
+        **kwargs,
     )
 
     # --------------------------------------------------------------
@@ -739,6 +862,17 @@ def plot_adapted_vs_highres_uniform(
         bc_choice=bc_choice,
         quad_rule=quad_rule,
         use_nudft=False,
+        maxiter_nufft=maxiter_nufft,
+        tol_nufft=tol_nufft,
+        reg_param=reg_param,
+        eps_finufft=eps_finufft,
+        precond_shift=precond_shift,
+        kde_oversample=kde_oversample,
+        kde_bandwidth=kde_bandwidth,
+        num_processors=num_processors,
+        use_gpu=use_gpu,
+        num_runs=num_runs,
+        **kwargs,
     )
 
     # --------------------------------------------------------------

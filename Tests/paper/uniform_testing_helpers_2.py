@@ -19,16 +19,18 @@ from Poisson_Solver.visualization import compute_error_metrics
 from Poisson_Solver.poisson_solver import poisson_solver
 
 # ==============================================================================
-# Multi-Run Timing Configuration
+# Multi-Run Timing Configuration & Global Backend
 # ==============================================================================
 TIME_TRIALS = False  # Set to True to run each solve 5 times and record min runtime
 NUM_RUNS = 5
+GLOBAL_USE_GPU = False
 
-def set_timing_config(time_trials=False, num_runs=5):
-    """Globally configure multi-trial benchmark timing."""
-    global TIME_TRIALS, NUM_RUNS
+def set_timing_config(time_trials=False, num_runs=5, use_gpu=False):
+    """Globally configure multi-trial benchmark timing and backend."""
+    global TIME_TRIALS, NUM_RUNS, GLOBAL_USE_GPU
     TIME_TRIALS = bool(time_trials)
     NUM_RUNS = int(num_runs) if time_trials else 1
+    GLOBAL_USE_GPU = bool(use_gpu)
 
 ANGLE_MESH_CACHE = {}
 
@@ -134,16 +136,18 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         u_fourier_0 = np.array([])
 
     n_runs = num_runs if num_runs is not None else (NUM_RUNS if TIME_TRIALS else 1)
+    actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
 
     try:
         runtimes = []
         u_approx = None
         for _ in range(n_runs):
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
+            if actual_use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
 
             start_time = time.perf_counter()
 
@@ -155,13 +159,17 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
                 use_nudft_angular=(use_nudft if use_nudft is not None else False),
                 maxiter_nufft=50,
                 tol_nufft=1e-8,
+                num_processors=num_processors,
+                use_gpu=actual_use_gpu,
+                **kwargs,
             )
 
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
+            if actual_use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
 
             runtimes.append(time.perf_counter() - start_time)
 
@@ -188,12 +196,13 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         "time": solve_time,
     }
 
-def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, num_processors=None, use_gpu=None, **kwargs):
     bc_choice = BC_MAP[bc_name]
     quad_rule = QUAD_MAP[quad_name]
 
     azu_unif = method_cfg["azu_unif"]
     use_nudft = method_cfg.get("use_nudft", False)
+    actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
 
     iRadius = build_radial_mesh(M, rad_unif, R)
     iAngle  = get_cached_angle_mesh(method_cfg, N, M)
@@ -222,6 +231,9 @@ def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         use_nudft_angular=use_nudft,
         maxiter_nufft=50,
         tol_nufft=1e-8,
+        num_processors=num_processors,
+        use_gpu=actual_use_gpu,
+        **kwargs,
     )
     return x_coord, y_coord, u_approx, u_true
 

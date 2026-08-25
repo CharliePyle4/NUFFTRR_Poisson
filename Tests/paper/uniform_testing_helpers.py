@@ -226,17 +226,21 @@ def resolve_reg_param(cfg_reg, method, N, M, iAngle=None):
 # ---------------------------------------------------------
 TIME_TRIALS = False  # Set to True to run each solve 5 times and record min runtime
 NUM_RUNS = 5
+GLOBAL_USE_GPU = False
 
-def set_timing_config(time_trials=False, num_runs=5):
-    """Globally configure multi-trial benchmark timing."""
-    global TIME_TRIALS, NUM_RUNS
+def set_timing_config(time_trials=False, num_runs=5, use_gpu=False):
+    """Globally configure multi-trial benchmark timing and backend."""
+    global TIME_TRIALS, NUM_RUNS, GLOBAL_USE_GPU
     TIME_TRIALS = bool(time_trials)
     NUM_RUNS = int(num_runs) if time_trials else 1
+    GLOBAL_USE_GPU = bool(use_gpu)
     GLOBAL_CONFIG['time_trials'] = TIME_TRIALS
     GLOBAL_CONFIG['num_runs'] = NUM_RUNS
+    GLOBAL_CONFIG['use_gpu'] = GLOBAL_USE_GPU
 
 GLOBAL_CONFIG = {
     'num_processors': None,
+    'use_gpu': False,
     'R': 1.0,
     'rad_unif': 1,
     'tol_nufft': 1e-10,
@@ -368,7 +372,8 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
                     precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
                     kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
                     kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0),
-                    num_processors=GLOBAL_CONFIG.get('num_processors', None)
+                    num_processors=GLOBAL_CONFIG.get('num_processors', None),
+                    use_gpu=GLOBAL_CONFIG.get('use_gpu', False),
                 )
 
                 try:
@@ -833,7 +838,8 @@ def run_and_plot_errors_vary_m(N_fixed, M_values, methods, bc_choice=1, quad_rul
                 u_approx = poisson_solver(
                     f_values, g_values, u_fourier_0, N_fixed, M, iRadius, iAngle, R,
                     quad_rule=quad_rule, BC_choice=bc_choice, rad_unif=RAD_UNIF, grid_type=grid_type,
-                    use_nudft_angular=method.get("use_nudft", False)
+                    use_nudft_angular=method.get("use_nudft", False),
+                    use_gpu=GLOBAL_CONFIG.get('use_gpu', False)
                 )
                 _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)
                 
@@ -980,7 +986,8 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False, num_runs
                     eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
                     precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
                     kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
-                    kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
+                    kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0),
+                    use_gpu=GLOBAL_CONFIG.get('use_gpu', False)
                 )
 
                 try:

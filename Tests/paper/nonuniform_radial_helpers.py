@@ -177,14 +177,19 @@ def generate_custom_radial_grid(M, R=1.0, kind="uniform", **kwargs):
 # ==============================================================================
 # Multi-Run Timing Configuration
 # ==============================================================================
+# ==============================================================================
+# Multi-Run Timing Configuration & Global Backend
+# ==============================================================================
 TIME_TRIALS = False  # Set to True to run each solve 5 times and record min runtime
 NUM_RUNS = 5
+GLOBAL_USE_GPU = False
 
-def set_timing_config(time_trials=False, num_runs=5):
-    """Globally configure multi-trial benchmark timing."""
-    global TIME_TRIALS, NUM_RUNS
+def set_timing_config(time_trials=False, num_runs=5, use_gpu=False):
+    """Globally configure multi-trial benchmark timing and default backend."""
+    global TIME_TRIALS, NUM_RUNS, GLOBAL_USE_GPU
     TIME_TRIALS = bool(time_trials)
     NUM_RUNS = int(num_runs) if time_trials else 1
+    GLOBAL_USE_GPU = bool(use_gpu)
 
 
 def run_radial_benchmark_case(
@@ -196,7 +201,9 @@ def run_radial_benchmark_case(
     bc_choice=1,
     quad_rule=2,
     num_processors=None,
+    use_gpu=None,
     num_runs=None,
+    **kwargs,
 ):
     """
     Execute Poisson solve on uniform theta and specified radial grid r_m.
@@ -205,6 +212,7 @@ def run_radial_benchmark_case(
         rad_unif = 1 for uniform radial grid
         rad_unif = 0 for non-uniform radial grid
     """
+    actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     R = problem["R"]
     theta_solver = generate_uniform_azimuthal(N)
 
@@ -232,11 +240,12 @@ def run_radial_benchmark_case(
 
         runtimes = []
         for _ in range(n_runs):
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
+            if actual_use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
 
             t0 = time.perf_counter()
 
@@ -254,13 +263,16 @@ def run_radial_benchmark_case(
                 rad_unif=rad_unif_flag,
                 grid_type=1,  # Uniform FFT in theta
                 num_processors=num_processors,
+                use_gpu=actual_use_gpu,
+                **kwargs,
             )
 
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
+            if actual_use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
 
             runtimes.append(time.perf_counter() - t0)
 
@@ -289,22 +301,34 @@ def run_radial_benchmark_case(
     }
 
 
-def run_radial_grid_sweep(problem, N, M_values, rad_kinds, quad_rule=2):
+def run_radial_grid_sweep(problem, N, M_values, rad_kinds, quad_rule=2, num_processors=None, use_gpu=None, **kwargs):
     """
     Run M-refinement study across multiple radial mesh choices for a fixed N.
     """
+    actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
     try:
         if M_values and rad_kinds:
             r_warmup = generate_custom_radial_grid(M_values[0], R=problem["R"], kind=rad_kinds[0][0])
-            run_radial_benchmark_case(N=N, M=M_values[0], r_m=r_warmup, problem=problem, rad_kind=rad_kinds[0][1], quad_rule=quad_rule)
+            run_radial_benchmark_case(
+                N=N,
+                M=M_values[0],
+                r_m=r_warmup,
+                problem=problem,
+                rad_kind=rad_kinds[0][1],
+                quad_rule=quad_rule,
+                num_processors=num_processors,
+                use_gpu=actual_use_gpu,
+                **kwargs,
+            )
     except Exception:
         pass
 
     rows = []
+    backend_label = "GPU" if actual_use_gpu else "CPU"
     pbar = tqdm(
         total=len(M_values) * len(rad_kinds),
-        desc=f"Radial M-sweep ({problem['name']})",
+        desc=f"Radial M-sweep ({problem['name']}) [{backend_label}]",
     )
     for M in M_values:
         for kind, label in rad_kinds:
@@ -316,6 +340,9 @@ def run_radial_grid_sweep(problem, N, M_values, rad_kinds, quad_rule=2):
                 problem=problem,
                 rad_kind=label,
                 quad_rule=quad_rule,
+                num_processors=num_processors,
+                use_gpu=actual_use_gpu,
+                **kwargs,
             )
             rows.append(res)
             pbar.update(1)
@@ -323,22 +350,34 @@ def run_radial_grid_sweep(problem, N, M_values, rad_kinds, quad_rule=2):
     return pd.DataFrame(rows)
 
 
-def run_nxm_grid_sweep(problem, N_values, M_values, rad_kinds, quad_rule=2):
+def run_nxm_grid_sweep(problem, N_values, M_values, rad_kinds, quad_rule=2, num_processors=None, use_gpu=None, **kwargs):
     """
     Run full N x M grid sweep across angular counts N and radial counts M.
     """
+    actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     # Dummy Warmup Solve
     try:
         if N_values and M_values and rad_kinds:
             r_warmup = generate_custom_radial_grid(M_values[0], R=problem["R"], kind=rad_kinds[0][0])
-            run_radial_benchmark_case(N=N_values[0], M=M_values[0], r_m=r_warmup, problem=problem, rad_kind=rad_kinds[0][1], quad_rule=quad_rule)
+            run_radial_benchmark_case(
+                N=N_values[0],
+                M=M_values[0],
+                r_m=r_warmup,
+                problem=problem,
+                rad_kind=rad_kinds[0][1],
+                quad_rule=quad_rule,
+                num_processors=num_processors,
+                use_gpu=actual_use_gpu,
+                **kwargs,
+            )
     except Exception:
         pass
 
     rows = []
+    backend_label = "GPU" if actual_use_gpu else "CPU"
     pbar = tqdm(
         total=len(N_values) * len(M_values) * len(rad_kinds),
-        desc=f"N x M Sweep ({problem['name']})",
+        desc=f"N x M Sweep ({problem['name']}) [{backend_label}]",
     )
     for N in N_values:
         for M in M_values:
@@ -351,6 +390,9 @@ def run_nxm_grid_sweep(problem, N_values, M_values, rad_kinds, quad_rule=2):
                     problem=problem,
                     rad_kind=label,
                     quad_rule=quad_rule,
+                    num_processors=num_processors,
+                    use_gpu=actual_use_gpu,
+                    **kwargs,
                 )
                 rows.append(res)
                 pbar.update(1)
