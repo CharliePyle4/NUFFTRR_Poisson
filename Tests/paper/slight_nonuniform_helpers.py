@@ -33,16 +33,16 @@ from Poisson_Solver.poisson_solver import poisson_solver
 # ==============================================================================
 # Multi-Run Timing Configuration & Global Backend
 # ==============================================================================
-TIME_TRIALS = False  # Set to True to run each solve 5 times and record min runtime
-NUM_RUNS = 5
-GLOBAL_USE_GPU = False
+_GLOBAL_TIME_TRIALS = False
+_GLOBAL_NUM_RUNS = 5
+_GLOBAL_USE_GPU = False
 
 def set_timing_config(time_trials=False, num_runs=5, use_gpu=False):
     """Globally configure multi-trial benchmark timing and default backend."""
-    global TIME_TRIALS, NUM_RUNS, GLOBAL_USE_GPU
-    TIME_TRIALS = bool(time_trials)
-    NUM_RUNS = int(num_runs) if time_trials else 1
-    GLOBAL_USE_GPU = bool(use_gpu)
+    global _GLOBAL_TIME_TRIALS, _GLOBAL_NUM_RUNS, _GLOBAL_USE_GPU
+    _GLOBAL_TIME_TRIALS = bool(time_trials)
+    _GLOBAL_NUM_RUNS = int(num_runs) if time_trials else 1
+    _GLOBAL_USE_GPU = bool(use_gpu)
 
 
 def get_single_multipole_problem(R=1.0, mode=12, theta_0=np.pi):
@@ -245,7 +245,7 @@ def run_benchmark_case(
         - Error metric calculation.
         - Plot-data preparation.
     """
-    actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
+    actual_use_gpu = _GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     R = problem["R"]
 
     # --------------------------------------------------------------
@@ -320,12 +320,12 @@ def run_benchmark_case(
     if time_trials is not None:
         effective_time_trials = bool(time_trials)
     else:
-        effective_time_trials = TIME_TRIALS
+        effective_time_trials = _GLOBAL_TIME_TRIALS
 
     if num_runs is not None:
         n_runs = int(num_runs)
     else:
-        n_runs = NUM_RUNS if effective_time_trials else 1
+        n_runs = _GLOBAL_NUM_RUNS if effective_time_trials else 1
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -465,7 +465,7 @@ def run_all_algorithms_NxM_study(
         ("Adapted NUDFT", 1, True),
         ("Uniform FFT + periodic cubic spline", 2, False),
     ]
-    actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
+    actual_use_gpu = _GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     # Comprehensive Warmup Solve across ALL algorithms (Warms up cuSOLVER, cuFFT, cuFINUFFT plans, and CPU caches)
     for _, w_azu, w_nudft in algorithms:
         try:
