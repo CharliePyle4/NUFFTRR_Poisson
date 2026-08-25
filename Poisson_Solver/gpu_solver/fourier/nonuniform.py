@@ -213,46 +213,22 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
     gamma = cp.sum(cp.abs(s_T)**2, axis=1)  # (K,)
     norm_s0 = cp.sqrt(gamma) + 1e-14
 
-    # -----------------------------------------------------------------
-    # CUDA Graph Recording for 1 PCGLS Step Sequence
-    # -----------------------------------------------------------------
-    exec_graph = None
-    try:
-        stream = cp.cuda.Stream()
-        with stream:
-            stream.begin_capture()
-            plan2.execute(p_T, q_T)
-            norm_q_sq = cp.sum(cp.abs(q_T)**2 * w, axis=1) + 1e-28
-            alpha = (gamma / norm_q_sq)[:, None]
-            c_T += alpha * p_T
-            r_T -= alpha * q_T
-            cp.multiply(r_T, w, out=z_T)
-            plan1.execute(z_T, s_T)
-            graph = stream.end_capture()
-            exec_graph = graph.instantiate()
-    except Exception:
-        exec_graph = None
-
     for it in range(maxiter):
-        if exec_graph is not None:
-            exec_graph.launch()
-            gamma_new = cp.sum(cp.abs(s_T)**2, axis=1)
-        else:
-            # 1. Forward step: q = A p (Type-2 NUFFT)
-            plan2.execute(p_T, q_T)
+        # 1. Forward step: q = A p (Type-2 NUFFT)
+        plan2.execute(p_T, q_T)
 
-            # 2. Optimal step size
-            norm_q_sq = cp.sum(cp.abs(q_T)**2 * w, axis=1) + 1e-28  # (K,)
-            alpha = (gamma / norm_q_sq)[:, None]                    # (K, 1)
+        # 2. Optimal step size
+        norm_q_sq = cp.sum(cp.abs(q_T)**2 * w, axis=1) + 1e-28  # (K,)
+        alpha = (gamma / norm_q_sq)[:, None]                    # (K, 1)
 
-            # 3. Update Fourier coefficients & spatial residual
-            c_T += alpha * p_T
-            r_T -= alpha * q_T
-            cp.multiply(r_T, w, out=z_T)
+        # 3. Update Fourier coefficients & spatial residual
+        c_T += alpha * p_T
+        r_T -= alpha * q_T
+        cp.multiply(r_T, w, out=z_T)
 
-            # 4. Adjoint step: s = A^H (W r) (Type-1 NUFFT)
-            plan1.execute(z_T, s_T)
-            gamma_new = cp.sum(cp.abs(s_T)**2, axis=1)              # (K,)
+        # 4. Adjoint step: s = A^H (W r) (Type-1 NUFFT)
+        plan1.execute(z_T, s_T)
+        gamma_new = cp.sum(cp.abs(s_T)**2, axis=1)              # (K,)
 
         rel_res = cp.max(cp.sqrt(gamma_new) / norm_s0)
         if rel_res < tol:
@@ -292,59 +268,34 @@ def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
     if cp.max(col_res_sq / norm_b_denom_sq) < tol2:
         return X
 
-    exec_graph = None
-    try:
-        stream = cp.cuda.Stream()
-        with stream:
-            stream.begin_capture()
-            TP = T_op(P)
-            delta = cp.vdot(P, TP).real
-            alpha = gamma / (delta + 1e-28)
-            X += alpha * P
-            R -= alpha * TP
-            if M_inv is not None:
-                Z_new = M_inv(R)
-            else:
-                Z_new = R.copy()
-            gamma_new = cp.vdot(R, Z_new).real
-            beta = gamma_new / (gamma + 1e-14)
-            P *= beta
-            P += Z_new
-            graph = stream.end_capture()
-            exec_graph = graph.instantiate()
-    except Exception:
-        exec_graph = None
-
     for _ in range(maxiter):
-        if exec_graph is not None:
-            exec_graph.launch()
-        else:
-            TP = T_op(P)
-            delta = cp.vdot(P, TP).real
-            if delta <= 0 or cp.isnan(delta):
-                break
+        TP = T_op(P)
+        delta = cp.vdot(P, TP).real
+        if delta <= 0 or cp.isnan(delta):
+            break
 
-            alpha = gamma / delta
+        alpha = gamma / delta
 
-            X += alpha * P
-            R -= alpha * TP
-
-            if M_inv is not None:
-                Z_new = M_inv(R)
-            else:
-                Z_new = R.copy()
-
-            gamma_new = cp.vdot(R, Z_new).real
-            if gamma_new < 1e-28:
-                break
-
-            beta = gamma_new / (gamma + 1e-14)
-            P *= beta
-            P += Z_new
+        X += alpha * P
+        R -= alpha * TP
 
         col_res_sq = cp.einsum('ij,ij->i', R.real, R.real) + cp.einsum('ij,ij->i', R.imag, R.imag)
         if cp.max(col_res_sq / norm_b_denom_sq) < tol2:
             break
+
+        if M_inv is not None:
+            Z_new = M_inv(R)
+        else:
+            Z_new = R.copy()
+
+        gamma_new = cp.vdot(R, Z_new).real
+        if gamma_new < 1e-28:
+            break
+
+        beta = gamma_new / (gamma + 1e-14)
+        P *= beta
+        P += Z_new
+        gamma = gamma_new
 
     return X
 

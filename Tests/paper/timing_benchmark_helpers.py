@@ -30,16 +30,18 @@ from Poisson_Solver.poisson_solver import poisson_solver
 
 
 # ==============================================================================
-# Multi-Run Timing Configuration
+# Multi-Run Timing Configuration & Global Backend
 # ==============================================================================
 TIME_TRIALS = False  # Set to True to run each solve multiple times and record min runtime
 NUM_RUNS = 5
+GLOBAL_USE_GPU = False
 
-def set_timing_config(time_trials=False, num_runs=5):
-    """Globally configure multi-trial benchmark timing."""
-    global TIME_TRIALS, NUM_RUNS
+def set_timing_config(time_trials=False, num_runs=5, use_gpu=False):
+    """Globally configure multi-trial benchmark timing and default backend."""
+    global TIME_TRIALS, NUM_RUNS, GLOBAL_USE_GPU
     TIME_TRIALS = bool(time_trials)
     NUM_RUNS = int(num_runs) if time_trials else 1
+    GLOBAL_USE_GPU = bool(use_gpu)
 
 
 # ==============================================================================
