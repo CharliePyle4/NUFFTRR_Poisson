@@ -99,14 +99,14 @@ def _pad_coeff_to_Np1(coeff_core: cp.ndarray, N: int) -> cp.ndarray:
 # cuFINUFFT Wrappers
 # ---------------------------------------------------------
 def _nufft_forward(x_wrapped, fhat, eps=1e-12):
-    x = cp.ascontiguousarray(x_wrapped, dtype=float)
-    fhat = cp.asarray(fhat, dtype=cp.complex128)
+    x = cp.ascontiguousarray(x_wrapped, dtype=cp.float64)
+    fhat = cp.ascontiguousarray(fhat, dtype=cp.complex128)
     if fhat.ndim == 1:
         N_modes = fhat.size
         plan = cufinufft.Plan(2, (N_modes,), n_trans=1, isign=+1, eps=eps, dtype=np.float64)
         plan.setpts(x)
         out = cp.empty(x.size, dtype=cp.complex128)
-        plan.execute(fhat[None, :], out[None, :])
+        plan.execute(fhat, out)
         return out
     N_modes, K = fhat.shape
     fhat_KN = cp.ascontiguousarray(fhat.T, dtype=cp.complex128)
@@ -118,8 +118,8 @@ def _nufft_forward(x_wrapped, fhat, eps=1e-12):
 
 
 def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
-    x = cp.ascontiguousarray(x_wrapped, dtype=float)
-    f = cp.asarray(f, dtype=cp.complex128)
+    x = cp.ascontiguousarray(x_wrapped, dtype=cp.float64)
+    f = cp.ascontiguousarray(f, dtype=cp.complex128)
     M = x.size
     if f.ndim == 1:
         if f.size != M:
@@ -127,7 +127,7 @@ def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
         plan = cufinufft.Plan(1, (N_modes,), n_trans=1, isign=-1, eps=eps, dtype=np.float64)
         plan.setpts(x)
         out = cp.empty(N_modes, dtype=cp.complex128)
-        plan.execute(f[None, :], out[None, :])
+        plan.execute(f, out)
         return out
     if f.shape[0] != M:
         raise ValueError("x_wrapped length must equal first dim of f")
@@ -146,9 +146,8 @@ def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
 def _compute_pipe_menon_weights(theta: cp.ndarray, n_iter: int = 2, eps: float = 1e-12) -> cp.ndarray:
     """
     Pipe & Menon (1999) Iterative Sampling Density Compensation on GPU.
-    Accelerated with CuPy CUDA Graph capture.
     """
-    x = _wrap_angles(theta)
+    x = cp.ascontiguousarray(_wrap_angles(theta), dtype=cp.float64)
     N = theta.size
 
     theta_ext = cp.concatenate([[theta[-1] - 2.0*cp.pi], theta, [theta[0] + 2.0*cp.pi]])
@@ -159,37 +158,18 @@ def _compute_pipe_menon_weights(theta: cp.ndarray, n_iter: int = 2, eps: float =
     p2 = cufinufft.Plan(2, (N,), n_trans=1, isign=+1, eps=eps, dtype=np.float64)
     p2.setpts(x)
 
-    c = cp.empty((1, N), dtype=cp.complex128)
-    d = cp.empty((1, N), dtype=cp.complex128)
-    w_arr = w.astype(cp.complex128)[None, :]
+    c = cp.empty(N, dtype=cp.complex128)
+    d = cp.empty(N, dtype=cp.complex128)
+    w_vec = cp.ascontiguousarray(w.astype(cp.complex128))
 
-    exec_graph = None
-    try:
-        stream = cp.cuda.Stream()
-        with stream:
-            stream.begin_capture()
-            for _ in range(n_iter):
-                p1.execute(w_arr, c)
-                p2.execute(c, d)
-                density = cp.maximum(cp.real(d[0, :]), 1e-12)
-                w_arr[0, :] = w_arr[0, :] / density
-                w_arr[0, :] = w_arr[0, :] / cp.sum(w_arr[0, :].real)
-            graph = stream.end_capture()
-            exec_graph = graph.instantiate()
-    except Exception:
-        exec_graph = None
+    for _ in range(n_iter):
+        p1.execute(w_vec, c)
+        p2.execute(c, d)
+        density = cp.maximum(cp.real(d), 1e-12)
+        w_vec = w_vec / density
+        w_vec = w_vec / cp.sum(w_vec.real)
 
-    if exec_graph is not None:
-        exec_graph.launch()
-    else:
-        for _ in range(n_iter):
-            p1.execute(w_arr, c)
-            p2.execute(c, d)
-            density = cp.maximum(cp.real(d[0, :]), 1e-12)
-            w_arr[0, :] = w_arr[0, :] / density
-            w_arr[0, :] = w_arr[0, :] / cp.sum(w_arr[0, :].real)
-
-    return w_arr.real[0, :]
+    return w_vec.real
 
 
 def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-12, **kwargs):
@@ -197,8 +177,8 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
     High-Performance Preconditioned Conjugate Gradient for Least Squares (PCGLS) on GPU.
     Accelerated with CuPy CUDA Graph capture to eliminate Python driver launch overhead.
     """
-    theta = cp.asarray(theta_j, dtype=float)
-    x = _wrap_angles(theta)
+    theta = cp.asarray(theta_j, dtype=cp.float64)
+    x = cp.ascontiguousarray(_wrap_angles(theta), dtype=cp.float64)
     N = theta.size
     is_1d = (f_arr.ndim == 1)
 
@@ -213,7 +193,7 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
     r_T = f_T.copy()  # Spatial residual r = f - A c
 
     # Compute optimal Pipe & Menon weights
-    w = _compute_pipe_menon_weights(theta, n_iter=2, eps=eps)[None, :]  # (1, N)
+    w = cp.ascontiguousarray(_compute_pipe_menon_weights(theta, n_iter=2, eps=eps)[None, :], dtype=cp.float64)  # (1, N)
 
     # Initialize cuFINUFFT Guru Plans once outside CGLS loop
     plan1 = cufinufft.Plan(1, (N,), n_trans=K, isign=-1, eps=eps, dtype=np.float64)
@@ -223,9 +203,7 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
     plan2.setpts(x)
 
     # Pre-allocate working GPU buffers
-    z_T = cp.empty((K, N), dtype=cp.complex128)
-    cp.multiply(r_T, w, out=z_T)
-
+    z_T = cp.ascontiguousarray(cp.multiply(r_T, w), dtype=cp.complex128)
     s_T = cp.empty((K, N), dtype=cp.complex128)
     plan1.execute(z_T, s_T)
 
