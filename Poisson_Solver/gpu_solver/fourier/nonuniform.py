@@ -59,7 +59,9 @@ def _compute_fft_kde_weights(theta_j: cp.ndarray,
     )
 
     # 4. Interpolate density to original angle positions (periodic)
-    density = cp.interp(theta_j, grid_centers, density_grid, period=2 * cp.pi)
+    grid_centers_ext = cp.concatenate(([grid_centers[-1] - 2 * cp.pi], grid_centers, [grid_centers[0] + 2 * cp.pi]))
+    density_ext = cp.concatenate(([density_grid[-1]], density_grid, [density_grid[0]]))
+    density = cp.interp(theta_j, grid_centers_ext, density_ext)
 
     # 5. Invert density -> weights, normalize so sum(w) = 1
     w = 1.0 / density
@@ -342,7 +344,7 @@ def _invert_nufft_block_cgls_shared(theta_j,
         T_in[:, :N] = X
         T_hat = cp.fft.fft(T_in, axis=1)
         T_out = cp.fft.ifft(T_hat * V_hat, axis=1)
-        return (T_out[:, :N].copy() / (2.0 * N)) + (reg_param) * X
+        return T_out[:, :N].copy() + (reg_param) * X
 
     # 4. Circulant Preconditioner via T. Chan's Optimal Formula
     k = cp.arange(N)
@@ -354,7 +356,7 @@ def _invert_nufft_block_cgls_shared(theta_j,
         M_in = cp.fft.ifftshift(V, axes=1)
         M_hat = cp.fft.fft(M_in, axis=1)
         M_out = cp.fft.ifft(M_hat * eig_c_inv, axis=1)
-        return cp.fft.fftshift(M_out / N, axes=1).copy()
+        return cp.fft.fftshift(M_out, axes=1).copy()
 
     # 5. Solve using Block CG (Normal Equations)
     X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
