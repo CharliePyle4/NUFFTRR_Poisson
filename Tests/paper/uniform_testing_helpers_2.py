@@ -18,6 +18,18 @@ from Poisson_Solver.grids import (
 from Poisson_Solver.visualization import compute_error_metrics
 from Poisson_Solver.poisson_solver import poisson_solver
 
+# ==============================================================================
+# Multi-Run Timing Configuration
+# ==============================================================================
+TIME_TRIALS = False  # Set to True to run each solve 5 times and record min runtime
+NUM_RUNS = 5
+
+def set_timing_config(time_trials=False, num_runs=5):
+    """Globally configure multi-trial benchmark timing."""
+    global TIME_TRIALS, NUM_RUNS
+    TIME_TRIALS = bool(time_trials)
+    NUM_RUNS = int(num_runs) if time_trials else 1
+
 ANGLE_MESH_CACHE = {}
 
 def get_problem_functions(u_sym, x, y):
@@ -86,7 +98,7 @@ def build_radial_mesh(M, rad_unif, R):
         return generate_uniform_radial(M, R)
     return generate_nonuniform_radial(M, R)
 
-def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, num_runs=None):
     bc_choice = BC_MAP[bc_name]
     quad_rule = QUAD_MAP[quad_name]
 
@@ -121,32 +133,39 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
     else:
         u_fourier_0 = np.array([])
 
+    n_runs = num_runs if num_runs is not None else (NUM_RUNS if TIME_TRIALS else 1)
+
     try:
-        try:
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-        except Exception:
-            pass
+        runtimes = []
+        u_approx = None
+        for _ in range(n_runs):
+            try:
+                import cupy as cp
+                cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
 
-        start_time = time.perf_counter()
+            start_time = time.perf_counter()
 
-        u_approx = poisson_solver(
-            f_values, g_values, u_fourier_0,
-            N, M, iRadius, iAngle, R,
-            quad_rule, bc_choice,
-            rad_unif, azu_unif,
-            use_nudft_angular=(use_nudft if use_nudft is not None else False),
-            maxiter_nufft=50,
-            tol_nufft=1e-8,
-        )
+            u_approx = poisson_solver(
+                f_values, g_values, u_fourier_0,
+                N, M, iRadius, iAngle, R,
+                quad_rule, bc_choice,
+                rad_unif, azu_unif,
+                use_nudft_angular=(use_nudft if use_nudft is not None else False),
+                maxiter_nufft=50,
+                tol_nufft=1e-8,
+            )
 
-        try:
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-        except Exception:
-            pass
+            try:
+                import cupy as cp
+                cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
 
-        solve_time = time.perf_counter() - start_time
+            runtimes.append(time.perf_counter() - start_time)
+
+        solve_time = min(runtimes)
 
         _, linf_rel, _, l2_rel = compute_error_metrics(
             u_approx, u_true, iRadius, iAngle

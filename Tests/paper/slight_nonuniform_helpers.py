@@ -30,6 +30,19 @@ from Poisson_Solver.visualization import compute_error_metrics
 from Poisson_Solver.poisson_solver import poisson_solver
 
 
+# ==============================================================================
+# Multi-Run Timing Configuration
+# ==============================================================================
+TIME_TRIALS = False  # Set to True to run each solve 5 times and record min runtime
+NUM_RUNS = 5
+
+def set_timing_config(time_trials=False, num_runs=5):
+    """Globally configure multi-trial benchmark timing."""
+    global TIME_TRIALS, NUM_RUNS
+    TIME_TRIALS = bool(time_trials)
+    NUM_RUNS = int(num_runs) if time_trials else 1
+
+
 def get_single_multipole_problem(R=1.0, mode=12, theta_0=np.pi):
     """Smooth Dirichlet disk problem u=(R^2-r^2)(r/R)^m cos(m(theta-theta_0))."""
     if not isinstance(mode, (int, np.integer)) or mode < 1:
@@ -206,6 +219,7 @@ def run_benchmark_case(
     use_nudft=False,
     maxiter_nufft=100,
     tol_nufft=1e-10,
+    num_runs=None,
 ):
     """
     Solve the disk Poisson problem from jittered angular measurements.
@@ -321,43 +335,48 @@ def run_benchmark_case(
     # --------------------------------------------------------------
     # Timed Poisson solve.
     # --------------------------------------------------------------
+    n_runs = num_runs if num_runs is not None else (NUM_RUNS if TIME_TRIALS else 1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
-        try:
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-        except Exception:
-            pass
+        runtimes = []
+        for _ in range(n_runs):
+            try:
+                import cupy as cp
+                cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
 
-        t0 = time.perf_counter()
+            t0 = time.perf_counter()
 
-        u_approx = poisson_solver(
-            f_values=f_values,
-            g_values=g_values,
-            u_fourier_0=u_fourier_0,
-            N=N,
-            M=M,
-            r_m=r_m,
-            theta_j=theta_solver,
-            R=R,
-            quad_rule=quad_rule,
-            BC_choice=bc_choice,
-            rad_unif=1,
-            azu_unif=azu_unif,
-            grid_type=(1 if azu_unif == 2 else 2),
-            use_nudft_angular=use_nudft,
-            maxiter_nufft=maxiter_nufft,
-            tol_nufft=tol_nufft,
-        )
+            u_approx = poisson_solver(
+                f_values=f_values,
+                g_values=g_values,
+                u_fourier_0=u_fourier_0,
+                N=N,
+                M=M,
+                r_m=r_m,
+                theta_j=theta_solver,
+                R=R,
+                quad_rule=quad_rule,
+                BC_choice=bc_choice,
+                rad_unif=1,
+                azu_unif=azu_unif,
+                grid_type=(1 if azu_unif == 2 else 2),
+                use_nudft_angular=use_nudft,
+                maxiter_nufft=maxiter_nufft,
+                tol_nufft=tol_nufft,
+            )
 
-        try:
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-        except Exception:
-            pass
+            try:
+                import cupy as cp
+                cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
 
-        runtime = time.perf_counter() - t0
+            runtimes.append(time.perf_counter() - t0)
+
+        runtime = min(runtimes)
 
     # --------------------------------------------------------------
     # Evaluate exact solution and errors outside the timed region.

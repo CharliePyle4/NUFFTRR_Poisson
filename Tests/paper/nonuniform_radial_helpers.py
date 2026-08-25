@@ -175,8 +175,17 @@ def generate_custom_radial_grid(M, R=1.0, kind="uniform", **kwargs):
 
 
 # ==============================================================================
-# Benchmark & Execution Pipeline
+# Multi-Run Timing Configuration
 # ==============================================================================
+TIME_TRIALS = False  # Set to True to run each solve 5 times and record min runtime
+NUM_RUNS = 5
+
+def set_timing_config(time_trials=False, num_runs=5):
+    """Globally configure multi-trial benchmark timing."""
+    global TIME_TRIALS, NUM_RUNS
+    TIME_TRIALS = bool(time_trials)
+    NUM_RUNS = int(num_runs) if time_trials else 1
+
 
 def run_radial_benchmark_case(
     N,
@@ -187,6 +196,7 @@ def run_radial_benchmark_case(
     bc_choice=1,
     quad_rule=2,
     num_processors=None,
+    num_runs=None,
 ):
     """
     Execute Poisson solve on uniform theta and specified radial grid r_m.
@@ -216,40 +226,45 @@ def run_radial_benchmark_case(
     rad_unif_flag = 1 if is_uniform else 0
 
     # 2. Timed Poisson Solve
+    n_runs = num_runs if num_runs is not None else (NUM_RUNS if TIME_TRIALS else 1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
-        try:
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-        except Exception:
-            pass
+        runtimes = []
+        for _ in range(n_runs):
+            try:
+                import cupy as cp
+                cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
 
-        t0 = time.perf_counter()
+            t0 = time.perf_counter()
 
-        u_approx = poisson_solver(
-            f_values=f_values,
-            g_values=g_values,
-            u_fourier_0=u_fourier_0,
-            N=N,
-            M=M,
-            r_m=r_m,
-            theta_j=theta_solver,
-            R=R,
-            quad_rule=quad_rule,
-            BC_choice=bc_choice,
-            rad_unif=rad_unif_flag,
-            grid_type=1,  # Uniform FFT in theta
-            num_processors=num_processors,
-        )
+            u_approx = poisson_solver(
+                f_values=f_values,
+                g_values=g_values,
+                u_fourier_0=u_fourier_0,
+                N=N,
+                M=M,
+                r_m=r_m,
+                theta_j=theta_solver,
+                R=R,
+                quad_rule=quad_rule,
+                BC_choice=bc_choice,
+                rad_unif=rad_unif_flag,
+                grid_type=1,  # Uniform FFT in theta
+                num_processors=num_processors,
+            )
 
-        try:
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-        except Exception:
-            pass
+            try:
+                import cupy as cp
+                cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
 
-        runtime = time.perf_counter() - t0
+            runtimes.append(time.perf_counter() - t0)
+
+        runtime = min(runtimes)
 
     # 3. Exact Solution and Error Metrics
     u_true = problem["u"](x_grid, y_grid)

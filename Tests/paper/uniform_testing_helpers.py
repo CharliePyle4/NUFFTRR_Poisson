@@ -222,8 +222,19 @@ def resolve_reg_param(cfg_reg, method, N, M, iAngle=None):
     return 1e-12
 
 # ---------------------------------------------------------
-# Global Config
+# Global Config & Multi-Run Timing Configuration
 # ---------------------------------------------------------
+TIME_TRIALS = False  # Set to True to run each solve 5 times and record min runtime
+NUM_RUNS = 5
+
+def set_timing_config(time_trials=False, num_runs=5):
+    """Globally configure multi-trial benchmark timing."""
+    global TIME_TRIALS, NUM_RUNS
+    TIME_TRIALS = bool(time_trials)
+    NUM_RUNS = int(num_runs) if time_trials else 1
+    GLOBAL_CONFIG['time_trials'] = TIME_TRIALS
+    GLOBAL_CONFIG['num_runs'] = NUM_RUNS
+
 GLOBAL_CONFIG = {
     'num_processors': None,
     'R': 1.0,
@@ -238,14 +249,18 @@ GLOBAL_CONFIG = {
     'quad_rule': 1,
     'BC_choice': 1,
     'problem_type': 0,
-    'custom_problem': None
+    'custom_problem': None,
+    'time_trials': False,
+    'num_runs': 5,
 }
 
 def set_global_config(**kwargs):
-    global GLOBAL_CONFIG, R, RAD_UNIF
+    global GLOBAL_CONFIG, R, RAD_UNIF, TIME_TRIALS, NUM_RUNS
     GLOBAL_CONFIG.update(kwargs)
     if 'R' in kwargs: R = kwargs['R']
     if 'rad_unif' in kwargs: RAD_UNIF = kwargs['rad_unif']
+    if 'time_trials' in kwargs: TIME_TRIALS = bool(kwargs['time_trials'])
+    if 'num_runs' in kwargs: NUM_RUNS = int(kwargs['num_runs'])
 
 def get_global_config():
     return GLOBAL_CONFIG
@@ -281,7 +296,7 @@ def get_angle_mesh(method, N, M):
 # ---------------------------------------------------------
 # Core Single Test Execution
 # ---------------------------------------------------------
-def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None, **kwargs):
+def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None, num_runs=None, **kwargs):
     iRadius = generate_uniform_radial(M, R)
     iAngle = get_angle_mesh(method, N, M)
 
@@ -307,7 +322,8 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
     cfg_reg = reg_param if reg_param is not None else GLOBAL_CONFIG.get('reg_param', 'auto')
     actual_reg = resolve_reg_param(cfg_reg, method, N, M, iAngle)
 
-    t0 = time.perf_counter()
+    n_runs = num_runs if num_runs is not None else (GLOBAL_CONFIG.get('num_runs', NUM_RUNS) if (GLOBAL_CONFIG.get('time_trials', TIME_TRIALS)) else 1)
+
     with warnings.catch_warnings():
         if mute:
             warnings.simplefilter("ignore")
@@ -326,46 +342,52 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
             else:
                 grid_type = solver_azu
 
-        try:
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
-        except Exception:
-            pass
-
-        t0 = time.perf_counter()
-
-        try:
-            u_approx = poisson_solver(
-                f_values, g_values, u_fourier_0,
-                N, M, iRadius, iAngle, R,
-                quad_rule=quad_rule, BC_choice=bc_choice,
-                rad_unif=RAD_UNIF,
-                grid_type=grid_type,
-                use_nudft_angular=nudft_flag,
-                maxiter_nufft=GLOBAL_CONFIG.get('maxiter_nufft', 50), 
-                tol_nufft=GLOBAL_CONFIG.get('tol_nufft', 1e-8),
-                reg_param=actual_reg,
-                eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
-                precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
-                kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
-                kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0),
-                num_processors=GLOBAL_CONFIG.get('num_processors', None)
-            )
-
+        runtimes = []
+        u_approx = None
+        for _ in range(n_runs):
             try:
                 import cupy as cp
                 cp.cuda.Stream.null.synchronize()
             except Exception:
                 pass
 
-            runtime = time.perf_counter() - t0
+            t0 = time.perf_counter()
 
+            try:
+                u_approx = poisson_solver(
+                    f_values, g_values, u_fourier_0,
+                    N, M, iRadius, iAngle, R,
+                    quad_rule=quad_rule, BC_choice=bc_choice,
+                    rad_unif=RAD_UNIF,
+                    grid_type=grid_type,
+                    use_nudft_angular=nudft_flag,
+                    maxiter_nufft=GLOBAL_CONFIG.get('maxiter_nufft', 50), 
+                    tol_nufft=GLOBAL_CONFIG.get('tol_nufft', 1e-8),
+                    reg_param=actual_reg,
+                    eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
+                    precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
+                    kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
+                    kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0),
+                    num_processors=GLOBAL_CONFIG.get('num_processors', None)
+                )
+
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
+
+                runtimes.append(time.perf_counter() - t0)
+
+            except Exception as exc:
+                if not mute:
+                    print(f"  !! ERROR [{method['name']}] N={N} M={M}: {exc}")
+                l2_rel = runtime = np.nan
+                break
+        else:
+            runtime = min(runtimes)
             # We only require L_2 relative error metric
             _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)
-        except Exception as exc:
-            if not mute:
-                print(f"  !! ERROR [{method['name']}] N={N} M={M}: {exc}")
-            l2_rel = runtime = np.nan
 
     return dict(
         name=method["name"], label=method["label"],
@@ -895,7 +917,7 @@ RADIAL_METHODS = [
 # Mirrors run_case() but respects rad_unif / rad_mapping.
 # ---------------------------------------------------------
 
-def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False):
+def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False, num_runs=None):
     """
     Like run_case(), but generates the radial grid from method['rad_mapping']
     (nonuniform) or linspace (uniform) based on method['rad_unif'].
@@ -909,7 +931,6 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False):
         iRadius = generate_nonuniform_radial(M, R, mapping=rad_mapping)
 
     iAngle = get_angle_mesh(method, N, M)
-
     x_coord, y_coord = generate_cartesian_grid_on_disk(iAngle, iRadius)
     f_values = generate_grid_values(f_rhs, x_coord, y_coord)
     u_t = generate_grid_values(u_true, x_coord, y_coord)
@@ -930,31 +951,54 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False):
 
     actual_reg = resolve_reg_param(GLOBAL_CONFIG.get('reg_param', 'auto'), method, N, M, iAngle)
 
-    t0 = time.perf_counter()
+    n_runs = num_runs if num_runs is not None else (GLOBAL_CONFIG.get('num_runs', NUM_RUNS) if (GLOBAL_CONFIG.get('time_trials', TIME_TRIALS)) else 1)
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        try:
-            u_approx = poisson_solver(
-                f_values, g_values, u_fourier_0,
-                N, M, iRadius, iAngle, R,
-                quad_rule=quad_rule, BC_choice=bc_choice,
-                rad_unif=rad_unif,
-                azu_unif=solver_azu,
-                use_nudft_angular=nudft_flag,
-                maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
-                tol_nufft=GLOBAL_CONFIG['tol_nufft'],
-                reg_param=actual_reg,
-                eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
-                precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
-                kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
-                kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
-            )
-            runtime = time.perf_counter() - t0
+        runtimes = []
+        u_approx = None
+        for _ in range(n_runs):
+            try:
+                import cupy as cp
+                cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
+
+            t0 = time.perf_counter()
+
+            try:
+                u_approx = poisson_solver(
+                    f_values, g_values, u_fourier_0,
+                    N, M, iRadius, iAngle, R,
+                    quad_rule=quad_rule, BC_choice=bc_choice,
+                    rad_unif=rad_unif,
+                    azu_unif=solver_azu,
+                    use_nudft_angular=nudft_flag,
+                    maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
+                    tol_nufft=GLOBAL_CONFIG['tol_nufft'],
+                    reg_param=actual_reg,
+                    eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
+                    precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
+                    kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
+                    kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
+                )
+
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
+
+                runtimes.append(time.perf_counter() - t0)
+
+            except Exception as exc:
+                if not mute:
+                    print(f"  !! ERROR [{method['name']}] N={N} M={M}: {exc}")
+                l2_rel = runtime = np.nan
+                break
+        else:
+            runtime = min(runtimes)
             _, _, _, l2_rel = compute_error_metrics(u_approx, u_t, iRadius, iAngle)
-        except Exception as exc:
-            if not mute:
-                print(f"  !! ERROR [{method['name']}] N={N} M={M}: {exc}")
-            l2_rel = runtime = np.nan
 
     return dict(
         name=method["name"], label=method["label"],
