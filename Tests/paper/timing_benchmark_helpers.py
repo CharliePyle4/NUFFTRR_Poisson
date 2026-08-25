@@ -318,8 +318,8 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             tasks.append((N, M))
 
     records = []
-    total_solves = len(tasks) * 5
-    pbar = tqdm(total=total_solves, desc=f"Benchmarking 5 Solvers [{'GPU' if use_gpu else 'CPU'}]")
+    total_solves = len(tasks) * 4
+    pbar = tqdm(total=total_solves, desc=f"Benchmarking 4 Solvers [{'GPU' if use_gpu else 'CPU'}]")
 
     for N, M in tasks:
         r_m = generate_uniform_radial(M, R)
@@ -404,7 +404,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
         pbar.update(1)
 
         # -------------------------------------------------------------
-        # 4 & 5. CG Mesh -> NUDFT & NUFFT CG (PCGLS)
+        # 4. CG Mesh -> NUFFT CG (PCGLS)
         # -------------------------------------------------------------
         th_cg = generate_benchmark_azimuthal_grid(cg_grid, N, **cg_kwargs)
         xc, yc = generate_cartesian_grid_on_disk(th_cg, r_m)
@@ -412,27 +412,6 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
         gc = g_func(xc[:, -1], yc[:, -1])
         uex_c = u_exact_func(xc, yc)
 
-        # (a) NUDFT on CG Mesh
-        u_nd_c, t_nd_c, min_nd_c, mean_nd_c = timed_poisson_solve(
-            f_vals=fc, g_vals=gc, u_fourier_0=u_fourier_0_nu,
-            N=N, M=M, r_m=r_m, theta_j=th_cg, R=R,
-            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
-            use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu
-        )
-        linf_nd_c, _, l2_nd_c, rel_l2_nd_c = compute_error_metrics(u_nd_c, uex_c, r_m, th_cg)
-        records.append({
-            "N": N, "M": M, "Total_Points": N * M,
-            "Grid_Category": "CG Mesh", "Grid_Type": cg_grid,
-            "Solver": "NUDFT (CG Mesh)",
-            "Time_sec": t_nd_c, "Time_ms": t_nd_c * 1000.0,
-            "Min_Time_sec": min_nd_c, "Mean_Time_sec": mean_nd_c,
-            "L_inf_Error": linf_nd_c, "L2_Error": l2_nd_c, "Rel_L2_Error": rel_l2_nd_c,
-            "Backend": "GPU" if use_gpu else "CPU",
-        })
-        pbar.update(1)
-
-        # (b) NUFFT CG (PCGLS) on CG Mesh
         u_nf_c, t_nf_c, min_nf_c, mean_nf_c = timed_poisson_solve(
             f_vals=fc, g_vals=gc, u_fourier_0=u_fourier_0_nu,
             N=N, M=M, r_m=r_m, theta_j=th_cg, R=R,
@@ -462,13 +441,12 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
 # ==============================================================================
 def display_benchmark_tables(df, N_values=None, M_values=None, title_prefix=""):
     """
-    Display comprehensive N x M timing and accuracy tables across all 5 methods.
+    Display comprehensive N x M timing and accuracy tables across all evaluated methods.
     """
     solver_order = [
         "Uniform FFT",
         "NUDFT (Toeplitz Mesh)",
         "NUFFT Toeplitz",
-        "NUDFT (CG Mesh)",
         "NUFFT CG (PCGLS)",
     ]
     solvers = [s for s in solver_order if s in df["Solver"].values]
@@ -537,7 +515,7 @@ def plot_grid_distributions(N=64, R=1.0):
 
 def plot_runtime_2x2(df, N_values=None, M_values=None, use_gpu=None, title="Runtime Scaling Analysis"):
     """
-    Unified 2x2 Log-Log Runtime Figure (in Seconds) plotting all 5 solvers.
+    Unified 2x2 Log-Log Runtime Figure (in Seconds) plotting all 4 solvers.
       (0, 0): Runtime vs N for min(M)
       (0, 1): Runtime vs N for max(M)
       (1, 0): Runtime vs M for min(N)
@@ -563,7 +541,6 @@ def plot_runtime_2x2(df, N_values=None, M_values=None, use_gpu=None, title="Runt
         "Uniform FFT": ("#1f77b4", "o", "-"),
         "NUDFT (Toeplitz Mesh)": ("#2ca02c", "s", "--"),
         "NUFFT Toeplitz": ("#17becf", "s", "-"),
-        "NUDFT (CG Mesh)": ("#d62728", "^", "--"),
         "NUFFT CG (PCGLS)": ("#ff7f0e", "^", "-"),
     }
 
@@ -598,7 +575,7 @@ def plot_runtime_2x2(df, N_values=None, M_values=None, use_gpu=None, title="Runt
 
 def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", use_gpu=None, title="Accuracy Scaling Analysis"):
     """
-    Unified 2x2 Log-Log Accuracy Figure plotting all 5 solvers.
+    Unified 2x2 Log-Log Accuracy Figure plotting all 4 solvers.
       (0, 0): L_inf Error vs N for min(M)
       (0, 1): L_inf Error vs N for max(M)
       (1, 0): L_inf Error vs M for min(N)
@@ -626,7 +603,6 @@ def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", us
         "Uniform FFT": ("#1f77b4", "o", "-"),
         "NUDFT (Toeplitz Mesh)": ("#2ca02c", "s", "--"),
         "NUFFT Toeplitz": ("#17becf", "s", "-"),
-        "NUDFT (CG Mesh)": ("#d62728", "^", "--"),
         "NUFFT CG (PCGLS)": ("#ff7f0e", "^", "-"),
     }
 
