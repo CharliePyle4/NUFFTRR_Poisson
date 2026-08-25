@@ -23,9 +23,9 @@ def _get_density_weights(theta: cp.ndarray) -> cp.ndarray:
     Compute normalized trapezoidal weights w_j for non-uniform angles theta in [0, 2π).
     sum(w_j) = 1.0, so that A^* W_norm A ≈ I.
     """
-    theta = cp.asarray(theta, dtype=float)
+    theta = cp.asarray(theta, dtype=cp.float64)
     if theta.ndim == 1:
-        th_ext = cp.concatenate(([theta[-1] - 2 * cp.pi], theta, [theta[0] + 2 * cp.pi]))
+        th_ext = cp.concatenate((theta[-1:] - 2.0 * cp.pi, theta, theta[:1] + 2.0 * cp.pi))
         w = (th_ext[2:] - th_ext[:-2]) / (4.0 * cp.pi)
         return w
     return cp.ones_like(theta)
@@ -37,6 +37,7 @@ def _compute_fft_kde_weights(theta_j: cp.ndarray,
     """
     Density compensation via FFT-accelerated KDE on the circle — O(N log N) in CuPy.
     """
+    theta_j = cp.asarray(theta_j, dtype=cp.float64)
     N = theta_j.size
     M = int(oversample * N)
     dx = 2 * cp.pi / M
@@ -59,8 +60,8 @@ def _compute_fft_kde_weights(theta_j: cp.ndarray,
     )
 
     # 4. Interpolate density to original angle positions (periodic)
-    grid_centers_ext = cp.concatenate(([grid_centers[-1] - 2 * cp.pi], grid_centers, [grid_centers[0] + 2 * cp.pi]))
-    density_ext = cp.concatenate(([density_grid[-1]], density_grid, [density_grid[0]]))
+    grid_centers_ext = cp.concatenate((grid_centers[-1:] - 2.0 * cp.pi, grid_centers, grid_centers[:1] + 2.0 * cp.pi))
+    density_ext = cp.concatenate((density_grid[-1:], density_grid, density_grid[:1]))
     density = cp.interp(theta_j, grid_centers_ext, density_ext)
 
     # 5. Invert density -> weights, normalize so sum(w) = 1
@@ -152,7 +153,7 @@ def _compute_pipe_menon_weights(theta: cp.ndarray, n_iter: int = 2, eps: float =
     x = cp.ascontiguousarray(_wrap_angles(theta), dtype=cp.float64)
     N = theta.size
 
-    theta_ext = cp.concatenate([[theta[-1] - 2.0*cp.pi], theta, [theta[0] + 2.0*cp.pi]])
+    theta_ext = cp.concatenate((theta[-1:] - 2.0 * cp.pi, theta, theta[:1] + 2.0 * cp.pi))
     w = 0.5 * (theta_ext[2:] - theta_ext[:-2]) / (2.0 * cp.pi)
 
     p1 = cufinufft.Plan(1, (N,), n_trans=1, isign=-1, eps=eps, dtype=np.complex128)
