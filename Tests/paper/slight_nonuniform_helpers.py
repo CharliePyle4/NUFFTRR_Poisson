@@ -228,6 +228,7 @@ def run_benchmark_case(
     kde_bandwidth=1.0,
     num_processors=None,
     use_gpu=None,
+    time_trials=None,
     num_runs=None,
     **kwargs,
 ):
@@ -281,37 +282,6 @@ def run_benchmark_case(
         )
 
     # --------------------------------------------------------------
-    # Start timing:
-    # interpolation/gridding plus Poisson solve only.
-    # --------------------------------------------------------------
-    t0 = time.perf_counter()
-
-    if azu_unif == 2:
-        # Uniform FFT pipeline:
-        # jittered measurements -> periodic cubic-spline interpolation ->
-        # uniform angular target grid.
-        theta_solver = generate_uniform_azimuthal(N)
-
-        f_values = periodic_cubic_spline_interpolate(
-            theta_raw,
-            f_raw,
-            theta_solver,
-        )
-
-        g_values = periodic_cubic_spline_interpolate(
-            theta_raw,
-            g_raw,
-            theta_solver,
-        )
-
-    else:
-        # Direct NUFFT / NUDFT pipeline:
-        # consume jittered angular measurements directly.
-        theta_solver = theta_raw
-        f_values = f_raw
-        g_values = g_raw
-
-    # --------------------------------------------------------------
     # Homogeneous Dirichlet boundary condition:
     #
     # u(R, theta) = 0, so the boundary zero Fourier mode is exactly 0.
@@ -327,8 +297,9 @@ def run_benchmark_case(
     else:
         # Preserve the optional Neumann path.
         # This is outside the main Dirichlet experiment.
+        theta_for_bc = generate_uniform_azimuthal(N) if azu_unif == 2 else theta_raw
         x_bc, y_bc = generate_cartesian_grid_on_disk(
-            theta_solver,
+            theta_for_bc,
             r_m,
         )
 
@@ -339,14 +310,23 @@ def run_benchmark_case(
 
         u_fourier_0 = compute_zero_mode(
             u_bc,
-            theta_solver,
+            theta_for_bc,
             azu_unif,
         )[-1]
 
     # --------------------------------------------------------------
     # Timed Poisson solve.
     # --------------------------------------------------------------
-    n_runs = num_runs if num_runs is not None else (NUM_RUNS if TIME_TRIALS else 1)
+    if time_trials is not None:
+        effective_time_trials = bool(time_trials)
+    else:
+        effective_time_trials = TIME_TRIALS
+
+    if num_runs is not None:
+        n_runs = int(num_runs)
+    else:
+        n_runs = NUM_RUNS if effective_time_trials else 1
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
@@ -360,6 +340,28 @@ def run_benchmark_case(
                     pass
 
             t0 = time.perf_counter()
+
+            if azu_unif == 2:
+                # Uniform FFT pipeline:
+                # jittered measurements -> periodic cubic-spline interpolation ->
+                # uniform angular target grid.
+                theta_solver = generate_uniform_azimuthal(N)
+                f_values = periodic_cubic_spline_interpolate(
+                    theta_raw,
+                    f_raw,
+                    theta_solver,
+                )
+                g_values = periodic_cubic_spline_interpolate(
+                    theta_raw,
+                    g_raw,
+                    theta_solver,
+                )
+            else:
+                # Direct NUFFT / NUDFT pipeline:
+                # consume jittered angular measurements directly.
+                theta_solver = theta_raw
+                f_values = f_raw
+                g_values = g_raw
 
             u_approx = poisson_solver(
                 f_values=f_values,
@@ -454,6 +456,7 @@ def run_all_algorithms_NxM_study(
     kde_bandwidth=1.0,
     num_processors=None,
     use_gpu=None,
+    time_trials=None,
     num_runs=None,
     **kwargs,
 ):
@@ -463,32 +466,34 @@ def run_all_algorithms_NxM_study(
         ("Uniform FFT + periodic cubic spline", 2, False),
     ]
     actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
-    # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
-    try:
-        th_warmup = generate_jittered_azimuthal_fixed(N_values[0], jitter_fraction, grid_seed)
-        run_benchmark_case(
-            N_values[0],
-            M_values[0],
-            1,
-            th_warmup,
-            problem,
-            bc_choice,
-            quad_rule,
-            False,
-            maxiter_nufft=maxiter_nufft,
-            tol_nufft=tol_nufft,
-            reg_param=reg_param,
-            eps_finufft=eps_finufft,
-            precond_shift=precond_shift,
-            kde_oversample=kde_oversample,
-            kde_bandwidth=kde_bandwidth,
-            num_processors=num_processors,
-            use_gpu=actual_use_gpu,
-            num_runs=num_runs,
-            **kwargs,
-        )
-    except Exception:
-        pass
+    # Comprehensive Warmup Solve across ALL algorithms (Warms up cuSOLVER, cuFFT, cuFINUFFT plans, and CPU caches)
+    for _, w_azu, w_nudft in algorithms:
+        try:
+            th_warmup = generate_jittered_azimuthal_fixed(N_values[0], jitter_fraction, grid_seed)
+            run_benchmark_case(
+                N_values[0],
+                M_values[0],
+                w_azu,
+                th_warmup,
+                problem,
+                bc_choice,
+                quad_rule,
+                w_nudft,
+                maxiter_nufft=maxiter_nufft,
+                tol_nufft=tol_nufft,
+                reg_param=reg_param,
+                eps_finufft=eps_finufft,
+                precond_shift=precond_shift,
+                kde_oversample=kde_oversample,
+                kde_bandwidth=kde_bandwidth,
+                num_processors=num_processors,
+                use_gpu=actual_use_gpu,
+                time_trials=False,
+                num_runs=1,
+                **kwargs,
+            )
+        except Exception:
+            pass
 
     rows = []
     backend_label = "GPU" if actual_use_gpu else "CPU"
@@ -516,6 +521,7 @@ def run_all_algorithms_NxM_study(
                     kde_bandwidth=kde_bandwidth,
                     num_processors=num_processors,
                     use_gpu=actual_use_gpu,
+                    time_trials=time_trials,
                     num_runs=num_runs,
                     **kwargs,
                 )
@@ -786,6 +792,7 @@ def plot_adapted_vs_highres_uniform(
     kde_bandwidth=1.0,
     num_processors=None,
     use_gpu=None,
+    time_trials=None,
     num_runs=None,
     **kwargs,
 ):
@@ -844,6 +851,7 @@ def plot_adapted_vs_highres_uniform(
         kde_bandwidth=kde_bandwidth,
         num_processors=num_processors,
         use_gpu=use_gpu,
+        time_trials=time_trials,
         num_runs=num_runs,
         **kwargs,
     )
@@ -870,6 +878,7 @@ def plot_adapted_vs_highres_uniform(
         kde_bandwidth=kde_bandwidth,
         num_processors=num_processors,
         use_gpu=use_gpu,
+        time_trials=time_trials,
         num_runs=num_runs,
         **kwargs,
     )
@@ -895,6 +904,7 @@ def plot_adapted_vs_highres_uniform(
         kde_bandwidth=kde_bandwidth,
         num_processors=num_processors,
         use_gpu=use_gpu,
+        time_trials=time_trials,
         num_runs=num_runs,
         **kwargs,
     )
@@ -920,6 +930,7 @@ def plot_adapted_vs_highres_uniform(
         kde_bandwidth=kde_bandwidth,
         num_processors=num_processors,
         use_gpu=use_gpu,
+        time_trials=time_trials,
         num_runs=num_runs,
         **kwargs,
     )
