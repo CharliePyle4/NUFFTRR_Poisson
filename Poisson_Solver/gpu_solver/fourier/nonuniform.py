@@ -103,14 +103,14 @@ def _nufft_forward(x_wrapped, fhat, eps=1e-12):
     fhat = cp.ascontiguousarray(fhat, dtype=cp.complex128)
     if fhat.ndim == 1:
         N_modes = fhat.size
-        plan = cufinufft.Plan(2, (N_modes,), n_trans=1, isign=+1, eps=eps, dtype=np.float64)
+        plan = cufinufft.Plan(2, (N_modes,), n_trans=1, isign=+1, eps=eps, dtype=np.complex128)
         plan.setpts(x)
         out = cp.empty(x.size, dtype=cp.complex128)
         plan.execute(fhat, out)
         return out
     N_modes, K = fhat.shape
     fhat_KN = cp.ascontiguousarray(fhat.T, dtype=cp.complex128)
-    plan = cufinufft.Plan(2, (N_modes,), n_trans=K, isign=+1, eps=eps, dtype=np.float64)
+    plan = cufinufft.Plan(2, (N_modes,), n_trans=K, isign=+1, eps=eps, dtype=np.complex128)
     plan.setpts(x)
     out_KM = cp.empty((K, x.size), dtype=cp.complex128)
     plan.execute(fhat_KN, out_KM)
@@ -124,7 +124,7 @@ def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
     if f.ndim == 1:
         if f.size != M:
             raise ValueError("x_wrapped length must equal length of f")
-        plan = cufinufft.Plan(1, (N_modes,), n_trans=1, isign=-1, eps=eps, dtype=np.float64)
+        plan = cufinufft.Plan(1, (N_modes,), n_trans=1, isign=-1, eps=eps, dtype=np.complex128)
         plan.setpts(x)
         out = cp.empty(N_modes, dtype=cp.complex128)
         plan.execute(f, out)
@@ -133,7 +133,7 @@ def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
         raise ValueError("x_wrapped length must equal first dim of f")
     K = f.shape[1]
     f_KM = cp.ascontiguousarray(f.T, dtype=cp.complex128)
-    plan = cufinufft.Plan(1, (N_modes,), n_trans=K, isign=-1, eps=eps, dtype=np.float64)
+    plan = cufinufft.Plan(1, (N_modes,), n_trans=K, isign=-1, eps=eps, dtype=np.complex128)
     plan.setpts(x)
     out_KN = cp.empty((K, N_modes), dtype=cp.complex128)
     plan.execute(f_KM, out_KN)
@@ -153,9 +153,9 @@ def _compute_pipe_menon_weights(theta: cp.ndarray, n_iter: int = 2, eps: float =
     theta_ext = cp.concatenate([[theta[-1] - 2.0*cp.pi], theta, [theta[0] + 2.0*cp.pi]])
     w = 0.5 * (theta_ext[2:] - theta_ext[:-2]) / (2.0 * cp.pi)
 
-    p1 = cufinufft.Plan(1, (N,), n_trans=1, isign=-1, eps=eps, dtype=np.float64)
+    p1 = cufinufft.Plan(1, (N,), n_trans=1, isign=-1, eps=eps, dtype=np.complex128)
     p1.setpts(x)
-    p2 = cufinufft.Plan(2, (N,), n_trans=1, isign=+1, eps=eps, dtype=np.float64)
+    p2 = cufinufft.Plan(2, (N,), n_trans=1, isign=+1, eps=eps, dtype=np.complex128)
     p2.setpts(x)
 
     c = cp.empty(N, dtype=cp.complex128)
@@ -196,10 +196,10 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
     w = cp.ascontiguousarray(_compute_pipe_menon_weights(theta, n_iter=2, eps=eps)[None, :], dtype=cp.float64)  # (1, N)
 
     # Initialize cuFINUFFT Guru Plans once outside CGLS loop
-    plan1 = cufinufft.Plan(1, (N,), n_trans=K, isign=-1, eps=eps, dtype=np.float64)
+    plan1 = cufinufft.Plan(1, (N,), n_trans=K, isign=-1, eps=eps, dtype=np.complex128)
     plan1.setpts(x)
 
-    plan2 = cufinufft.Plan(2, (N,), n_trans=K, isign=+1, eps=eps, dtype=np.float64)
+    plan2 = cufinufft.Plan(2, (N,), n_trans=K, isign=+1, eps=eps, dtype=np.complex128)
     plan2.setpts(x)
 
     # Pre-allocate working GPU buffers

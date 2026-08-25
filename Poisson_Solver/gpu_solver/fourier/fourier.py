@@ -143,7 +143,7 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: cp.ndarray,
         coeff[0, :] += u_fourier_coeff[N, :]  # Recombine the split Nyquist mode (k = -N/2 and +N/2)
         coeff_KN = cp.ascontiguousarray(coeff.T, dtype=cp.complex128)  # (M, N)
         
-        plan = cufinufft.Plan(2, (N,), n_trans=M, isign=+1, eps=eps, dtype=np.float64)
+        plan = cufinufft.Plan(2, (N,), n_trans=M, isign=+1, eps=eps, dtype=np.complex128)
         plan.setpts(x)
         out_KM = cp.empty((M, N), dtype=cp.complex128)
         plan.execute(coeff_KN, out_KM)
