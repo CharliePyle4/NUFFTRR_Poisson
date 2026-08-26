@@ -581,15 +581,15 @@ def plot_accuracy_table1(df, title_prefix="Table 1"):
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
     m_nudft = [m for m in methods if "NUDFT" in m]
     m_nufft_t = [m for m in methods if "NUFFT" in m and "Toeplitz" in m]
-    m_nufft_u = [m for m in methods if "NUFFT" in m and "Unsquared" in m]
-    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m]
+    m_nufft_u = [m for m in methods if "NUFFT" in m and ("Unsquared" in m or "PCGLS" in m)]
+    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m and "PCGLS" not in m]
     
     solver_groups = []
     if m_fft: solver_groups.append(("Uniform / FFT", m_fft))
     if m_nudft: solver_groups.append(("NUDFT", m_nudft))
     if m_nufft_gen: solver_groups.append(("NUFFT", m_nufft_gen))
     if m_nufft_t: solver_groups.append(("NUFFT (Toeplitz)", m_nufft_t))
-    if m_nufft_u: solver_groups.append(("NUFFT (Unsquared)", m_nufft_u))
+    if m_nufft_u: solver_groups.append(("NUFFT (PCGLS)", m_nufft_u))
     
     num_cols = len(solver_groups)
     fig, axes = plt.subplots(2, num_cols, figsize=(4.5 * num_cols, 5), sharey=True)
@@ -743,15 +743,15 @@ def plot_accuracy_comparison(df, index_col="N", title_prefix="Accuracy Compariso
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
     m_nudft = [m for m in methods if "NUDFT" in m]
     m_nufft_t = [m for m in methods if "NUFFT" in m and "Toeplitz" in m]
-    m_nufft_u = [m for m in methods if "NUFFT" in m and "Unsquared" in m]
-    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m]
+    m_nufft_u = [m for m in methods if "NUFFT" in m and ("Unsquared" in m or "PCGLS" in m)]
+    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m and "PCGLS" not in m]
     
     groups = []
     if m_fft: groups.append(("Uniform / FFT", m_fft))
     if m_nudft: groups.append(("NUDFT", m_nudft))
     if m_nufft_gen: groups.append(("NUFFT", m_nufft_gen))
     if m_nufft_t: groups.append(("NUFFT (Toeplitz)", m_nufft_t))
-    if m_nufft_u: groups.append(("NUFFT (Unsquared)", m_nufft_u))
+    if m_nufft_u: groups.append(("NUFFT (PCGLS)", m_nufft_u))
     
     num_cols = len(groups)
     fig, axes = plt.subplots(1, num_cols, figsize=(4.5 * num_cols, 3), sharey=True)
@@ -784,15 +784,15 @@ def plot_runtime_comparison(df, index_col="N", title_prefix="Accuracy Comparison
     m_fft = [m for m in methods if "FFT" in m and "NUFFT" not in m]
     m_nudft = [m for m in methods if "NUDFT" in m]
     m_nufft_t = [m for m in methods if "NUFFT" in m and "Toeplitz" in m]
-    m_nufft_u = [m for m in methods if "NUFFT" in m and "Unsquared" in m]
-    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m]
+    m_nufft_u = [m for m in methods if "NUFFT" in m and ("Unsquared" in m or "PCGLS" in m)]
+    m_nufft_gen = [m for m in methods if "NUFFT" in m and "Toeplitz" not in m and "Unsquared" not in m and "PCGLS" not in m]
     
     groups = []
     if m_fft: groups.append(("Uniform / FFT", m_fft))
     if m_nudft: groups.append(("NUDFT", m_nudft))
     if m_nufft_gen: groups.append(("NUFFT", m_nufft_gen))
     if m_nufft_t: groups.append(("NUFFT (Toeplitz)", m_nufft_t))
-    if m_nufft_u: groups.append(("NUFFT (Unsquared)", m_nufft_u))
+    if m_nufft_u: groups.append(("NUFFT (PCGLS)", m_nufft_u))
     
     num_cols = len(groups)
     fig, axes = plt.subplots(1, num_cols, figsize=(4.5 * num_cols, 4), sharey=True)
@@ -1296,26 +1296,38 @@ def plot_bc_quad_comparison_vs_M(df_bq, N_fixed, methods=None):
 
 
 
-def plot_runtime_table1_extremes(df, title_prefix="Table 1 (extreme N,M)"):
+def plot_runtime_table1_extremes(df, title_prefix=None, use_gpu=None):
     """
     2x2 runtime plot using only the lowest and highest N and M:
       Top-left:  runtime vs M for N = N_min
       Top-right: runtime vs M for N = N_max
       Bottom-left:  runtime vs N for M = M_min
       Bottom-right: runtime vs N for M = M_max
-    All solver labels are plotted in each relevant panel.
+    All solver labels are plotted with a single shared legend placed below the 2x2 plots.
     """
+    df = df.copy()
+    if "label" in df.columns:
+        df["label"] = df["label"].str.replace("(Unsquared)", "(PCGLS)", regex=False).str.replace("Unsquared", "PCGLS", regex=False)
+
     N_vals = sorted(df["N"].unique())
     M_vals = sorted(df["M"].unique())
     if len(N_vals) < 2 or len(M_vals) < 2:
         print("Need at least two distinct N and M values for extremes plot.")
         return
 
+    actual_use_gpu = GLOBAL_CONFIG.get('use_gpu', GLOBAL_USE_GPU) if use_gpu is None else bool(use_gpu)
+    backend_str = "GPU" if actual_use_gpu else "CPU"
+
+    if title_prefix is None or title_prefix in ("Table 1 (extreme N,M)", "Problem 1 — Table 1 (extreme N,M)"):
+        title = f"Algorithm Runtimes ({backend_str}), Uniform Mesh"
+    else:
+        title = title_prefix
+
     N_lo, N_hi = N_vals[0], N_vals[-1]
     M_lo, M_hi = M_vals[0], M_vals[-1]
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharey="row")
-    fig.suptitle(title_prefix)
+    fig.suptitle(title, fontsize=12, fontweight="bold", y=0.98)
 
     # Top-left: runtime vs M for N = N_lo
     ax = axes[0, 0]
@@ -1327,7 +1339,6 @@ def plot_runtime_table1_extremes(df, title_prefix="Table 1 (extreme N,M)"):
     ax.set_ylabel("Runtime (seconds)")
     ax.set_title(f"N = {N_lo} — Runtime vs M")
     ax.grid(True, which="both", ls="--", alpha=0.5)
-    ax.legend(fontsize=8)
 
     # Top-right: runtime vs M for N = N_hi
     ax = axes[0, 1]
@@ -1349,7 +1360,6 @@ def plot_runtime_table1_extremes(df, title_prefix="Table 1 (extreme N,M)"):
     ax.set_ylabel("Runtime (seconds)")
     ax.set_title(f"M = {M_lo} — Runtime vs N")
     ax.grid(True, which="both", ls="--", alpha=0.5)
-    ax.legend(fontsize=8)
 
     # Bottom-right: runtime vs N for M = M_hi
     ax = axes[1, 1]
@@ -1361,5 +1371,20 @@ def plot_runtime_table1_extremes(df, title_prefix="Table 1 (extreme N,M)"):
     ax.set_title(f"M = {M_hi} — Runtime vs N")
     ax.grid(True, which="both", ls="--", alpha=0.5)
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    # Single shared legend below the 2x2 plots
+    handles, legend_labels = axes[0, 0].get_legend_handles_labels()
+    if not handles:
+        handles, legend_labels = axes[1, 0].get_legend_handles_labels()
+
+    fig.legend(
+        handles,
+        legend_labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        ncol=len(legend_labels) if legend_labels else 1,
+        fontsize=9,
+        frameon=True,
+    )
+
+    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
     plt.show()
