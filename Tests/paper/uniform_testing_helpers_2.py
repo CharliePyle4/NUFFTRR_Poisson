@@ -100,7 +100,10 @@ def build_radial_mesh(M, rad_unif, R):
         return generate_uniform_radial(M, R)
     return generate_nonuniform_radial(M, R)
 
-def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, num_runs=None):
+def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann,
+                    BC_MAP, QUAD_MAP, rad_unif, R, num_processors=None, use_gpu=None,
+                    time_trials=None, num_runs=None, maxiter_nufft=50, tol_nufft=1e-8,
+                    reg_param=1e-12, eps_finufft=1e-12, **kwargs):
     bc_choice = BC_MAP[bc_name]
     quad_rule = QUAD_MAP[quad_name]
 
@@ -135,7 +138,7 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
     else:
         u_fourier_0 = np.array([])
 
-    n_runs = num_runs if num_runs is not None else (NUM_RUNS if TIME_TRIALS else 1)
+    n_runs = num_runs if num_runs is not None else (NUM_RUNS if (TIME_TRIALS if time_trials is None else bool(time_trials)) else 1)
     actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
 
     try:
@@ -157,8 +160,10 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
                 quad_rule, bc_choice,
                 rad_unif, azu_unif,
                 use_nudft_angular=(use_nudft if use_nudft is not None else False),
-                maxiter_nufft=50,
-                tol_nufft=1e-8,
+                maxiter_nufft=maxiter_nufft,
+                tol_nufft=tol_nufft,
+                reg_param=reg_param,
+                eps_finufft=eps_finufft,
                 num_processors=num_processors,
                 use_gpu=actual_use_gpu,
                 **kwargs,
@@ -196,7 +201,8 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         "time": solve_time,
     }
 
-def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, num_processors=None, use_gpu=None, **kwargs):
+def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R,
+                    num_processors=None, use_gpu=None, maxiter_nufft=50, tol_nufft=1e-8, reg_param=1e-12, eps_finufft=1e-12, **kwargs):
     bc_choice = BC_MAP[bc_name]
     quad_rule = QUAD_MAP[quad_name]
 
@@ -229,20 +235,26 @@ def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         quad_rule, bc_choice,
         rad_unif, azu_unif,
         use_nudft_angular=use_nudft,
-        maxiter_nufft=50,
-        tol_nufft=1e-8,
+        maxiter_nufft=maxiter_nufft,
+        tol_nufft=tol_nufft,
+        reg_param=reg_param,
+        eps_finufft=eps_finufft,
         num_processors=num_processors,
         use_gpu=actual_use_gpu,
         **kwargs,
     )
     return x_coord, y_coord, u_approx, u_true
 
-def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R,
+                num_processors=None, use_gpu=None, time_trials=None, num_runs=None,
+                maxiter_nufft=50, tol_nufft=1e-8, reg_param=1e-12, eps_finufft=1e-12, **kwargs):
     # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
     try:
         if methods and N_values and M_values:
             run_single_case(N=N_values[0], M=M_values[0], method_cfg=methods[0], bc_name="dirichlet", quad_name="trapezoidal",
-                            u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R)
+                            u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                            num_processors=num_processors, use_gpu=use_gpu, time_trials=False, num_runs=1,
+                            maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft, reg_param=reg_param, eps_finufft=eps_finufft, **kwargs)
     except Exception:
         pass
 
@@ -252,17 +264,23 @@ def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MA
             for M in M_values:
                 res = run_single_case(
                     N=N, M=M, method_cfg=method, bc_name="dirichlet", quad_name="trapezoidal",
-                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                    num_processors=num_processors, use_gpu=use_gpu, time_trials=time_trials, num_runs=num_runs,
+                    maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft, reg_param=reg_param, eps_finufft=eps_finufft, **kwargs
                 )
                 table1_results.append(res)
     return pd.DataFrame(table1_results)
 
-def run_table_2(methods, N_fixed, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def run_table_2(methods, N_fixed, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R,
+                num_processors=None, use_gpu=None, time_trials=None, num_runs=None,
+                maxiter_nufft=50, tol_nufft=1e-8, reg_param=1e-12, eps_finufft=1e-12, **kwargs):
     # Dummy Warmup Solve
     try:
         if methods and M_values:
             run_single_case(N=N_fixed, M=M_values[0], method_cfg=methods[0], bc_name="dirichlet", quad_name="trapezoidal",
-                            u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R)
+                            u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                            num_processors=num_processors, use_gpu=use_gpu, time_trials=False, num_runs=1,
+                            maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft, reg_param=reg_param, eps_finufft=eps_finufft, **kwargs)
     except Exception:
         pass
 
@@ -273,7 +291,9 @@ def run_table_2(methods, N_fixed, M_values, u, f, g_dirichlet, g_neumann, BC_MAP
                 for bc_name in ["dirichlet", "neumann"]:
                     res = run_single_case(
                         N=N_fixed, M=M, method_cfg=method, bc_name=bc_name, quad_name=quad_name,
-                        u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                        u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                        num_processors=num_processors, use_gpu=use_gpu, time_trials=time_trials, num_runs=num_runs,
+                        maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft, reg_param=reg_param, eps_finufft=eps_finufft, **kwargs
                     )
                     table2_results.append(res)
     return pd.DataFrame(table2_results)
@@ -314,7 +334,7 @@ def display_table_2(df_table2, methods, N_values, M_values):
         name = method["name"]
         print(f"\n{'='*80}\n{method['label']} : TABLE 2\n{'='*80}")
         df2 = df_table2[df_table2["method"] == name]
-        display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")[m] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel"]}, axis=1).reindex(M_values).map(dash_if_nan))
+        display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")["m"] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel"]}, axis=1).reindex(M_values).map(dash_if_nan))
 
 
 def display_table_varying_M(df_table, methods, M_values, title="TABLE"):
@@ -324,7 +344,7 @@ def display_table_varying_M(df_table, methods, M_values, title="TABLE"):
         name = method["name"]
         print(f"\n{'='*80}\n{method['label']} : {title}\n{'='*80}")
         df2 = df_table[df_table["method"] == name]
-        display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")[m] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel"]}, axis=1).reindex(M_values).map(dash_if_nan))
+        display(pd.concat({(q.capitalize() + " rule", b.capitalize(), m): df2[(df2["quad"] == q) & (df2["bc"] == b)].set_index("M")["m"] for q in ["trapezoidal", "simpson"] for b in ["dirichlet", "neumann"] for m in ["L_inf_rel", "L2_rel"]}, axis=1).reindex(M_values).map(dash_if_nan))
 
 def setup_problem_5(alpha=5):
     x, y = sp.symbols('x y')
@@ -344,14 +364,18 @@ def setup_problem_7():
     u_sym = sp.cos(10 * sp.pi * x) * sp.cos(10 * sp.pi * y)
     return get_problem_functions(u_sym, x, y)
 
-def run_timing_analysis(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def run_timing_analysis(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R,
+                        num_processors=None, use_gpu=None, time_trials=None, num_runs=None,
+                        maxiter_nufft=50, tol_nufft=1e-8, reg_param=1e-12, eps_finufft=1e-12, **kwargs):
     timing_results = []
     for method in methods:
         for N in N_values:
             for M in M_values:
                 res = run_single_case(
                     N=N, M=M, method_cfg=method, bc_name="dirichlet", quad_name="trapezoidal",
-                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                    num_processors=num_processors, use_gpu=use_gpu, time_trials=time_trials, num_runs=num_runs,
+                    maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft, reg_param=reg_param, eps_finufft=eps_finufft, **kwargs
                 )
                 timing_results.append({
                     "method": method["name"],
@@ -376,7 +400,10 @@ def display_timing_results(df_timing, methods, N_values, M_values):
 
 from tqdm.auto import tqdm
 
-def run_table_1_tracked(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, desc="Running", position=1):
+def run_table_1_tracked(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R,
+                        num_processors=None, use_gpu=None, time_trials=None, num_runs=None,
+                        maxiter_nufft=50, tol_nufft=1e-8, reg_param=1e-12, eps_finufft=1e-12,
+                        desc="Running", position=1, **kwargs):
     table1_results = []
     total = len(methods) * len(N_values) * len(M_values)
 
@@ -388,7 +415,9 @@ def run_table_1_tracked(methods, N_values, M_values, u, f, g_dirichlet, g_neuman
                 res = run_single_case(
                     N=N, M=M, method_cfg=method, bc_name="dirichlet", quad_name="trapezoidal",
                     u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann,
-                    BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                    BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                    num_processors=num_processors, use_gpu=use_gpu, time_trials=time_trials, num_runs=num_runs,
+                    maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft, reg_param=reg_param, eps_finufft=eps_finufft, **kwargs
                 )
                 wall_time = time.perf_counter() - case_start
                 res["wall_time"] = wall_time

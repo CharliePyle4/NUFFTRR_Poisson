@@ -259,12 +259,13 @@ GLOBAL_CONFIG = {
 }
 
 def set_global_config(**kwargs):
-    global GLOBAL_CONFIG, R, RAD_UNIF, TIME_TRIALS, NUM_RUNS
+    global GLOBAL_CONFIG, R, RAD_UNIF, TIME_TRIALS, NUM_RUNS, GLOBAL_USE_GPU
     GLOBAL_CONFIG.update(kwargs)
     if 'R' in kwargs: R = kwargs['R']
     if 'rad_unif' in kwargs: RAD_UNIF = kwargs['rad_unif']
     if 'time_trials' in kwargs: TIME_TRIALS = bool(kwargs['time_trials'])
     if 'num_runs' in kwargs: NUM_RUNS = int(kwargs['num_runs'])
+    if 'use_gpu' in kwargs: GLOBAL_USE_GPU = bool(kwargs['use_gpu'])
 
 def get_global_config():
     return GLOBAL_CONFIG
@@ -300,7 +301,10 @@ def get_angle_mesh(method, N, M):
 # ---------------------------------------------------------
 # Core Single Test Execution
 # ---------------------------------------------------------
-def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None, num_runs=None, **kwargs):
+def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
+             num_processors=None, use_gpu=None, time_trials=None, num_runs=None,
+             maxiter_nufft=None, tol_nufft=None, eps_finufft=None,
+             precond_shift=None, kde_oversample=None, kde_bandwidth=None, **kwargs):
     iRadius = generate_uniform_radial(M, R)
     iAngle = get_angle_mesh(method, N, M)
 
@@ -326,7 +330,17 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
     cfg_reg = reg_param if reg_param is not None else GLOBAL_CONFIG.get('reg_param', 'auto')
     actual_reg = resolve_reg_param(cfg_reg, method, N, M, iAngle)
 
-    n_runs = num_runs if num_runs is not None else (GLOBAL_CONFIG.get('num_runs', NUM_RUNS) if (GLOBAL_CONFIG.get('time_trials', TIME_TRIALS)) else 1)
+    effective_use_gpu = GLOBAL_CONFIG.get('use_gpu', GLOBAL_USE_GPU) if use_gpu is None else bool(use_gpu)
+    effective_time_trials = GLOBAL_CONFIG.get('time_trials', TIME_TRIALS) if time_trials is None else bool(time_trials)
+    n_runs = num_runs if num_runs is not None else (GLOBAL_CONFIG.get('num_runs', NUM_RUNS) if effective_time_trials else 1)
+
+    effective_maxiter = maxiter_nufft if maxiter_nufft is not None else GLOBAL_CONFIG.get('maxiter_nufft', 50)
+    effective_tol = tol_nufft if tol_nufft is not None else GLOBAL_CONFIG.get('tol_nufft', 1e-8)
+    effective_eps = eps_finufft if eps_finufft is not None else GLOBAL_CONFIG.get('eps_finufft', 1e-12)
+    effective_shift = precond_shift if precond_shift is not None else GLOBAL_CONFIG.get('precond_shift', 1e-3)
+    effective_kde_oversample = kde_oversample if kde_oversample is not None else GLOBAL_CONFIG.get('kde_oversample', 4)
+    effective_kde_bandwidth = kde_bandwidth if kde_bandwidth is not None else GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
+    effective_num_procs = num_processors if num_processors is not None else GLOBAL_CONFIG.get('num_processors', None)
 
     with warnings.catch_warnings():
         if mute:
@@ -349,11 +363,12 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
         runtimes = []
         u_approx = None
         for _ in range(n_runs):
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
+            if effective_use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
 
             t0 = time.perf_counter()
 
@@ -365,22 +380,24 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
                     rad_unif=RAD_UNIF,
                     grid_type=grid_type,
                     use_nudft_angular=nudft_flag,
-                    maxiter_nufft=GLOBAL_CONFIG.get('maxiter_nufft', 50), 
-                    tol_nufft=GLOBAL_CONFIG.get('tol_nufft', 1e-8),
+                    maxiter_nufft=effective_maxiter, 
+                    tol_nufft=effective_tol,
                     reg_param=actual_reg,
-                    eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
-                    precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
-                    kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
-                    kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0),
-                    num_processors=GLOBAL_CONFIG.get('num_processors', None),
-                    use_gpu=GLOBAL_CONFIG.get('use_gpu', False),
+                    eps_finufft=effective_eps,
+                    precond_shift=effective_shift,
+                    kde_oversample=effective_kde_oversample,
+                    kde_bandwidth=effective_kde_bandwidth,
+                    num_processors=effective_num_procs,
+                    use_gpu=effective_use_gpu,
+                    **kwargs,
                 )
 
-                try:
-                    import cupy as cp
-                    cp.cuda.Stream.null.synchronize()
-                except Exception:
-                    pass
+                if effective_use_gpu:
+                    try:
+                        import cupy as cp
+                        cp.cuda.Stream.null.synchronize()
+                    except Exception:
+                        pass
 
                 runtimes.append(time.perf_counter() - t0)
 
@@ -403,13 +420,36 @@ def run_case(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
 # ---------------------------------------------------------
 # Table Generation Pipelines
 # ---------------------------------------------------------
-def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_Table1", mute=False, reg_param=None, **kwargs):
+def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_Table1", mute=False, reg_param=None,
+                       num_processors=None, use_gpu=None, time_trials=None, num_runs=None,
+                       maxiter_nufft=None, tol_nufft=None, eps_finufft=None,
+                       precond_shift=None, kde_oversample=None, kde_bandwidth=None, **kwargs):
     # Dummy Warmup Solve (Warms up thread pools, CPU cache, and GPU plans)
     try:
         if methods and N_values and M_values:
-            run_case(N_values[0], M_values[0], methods[0], bc_choice=1, quad_rule=1, mute=True, reg_param=reg_param, **kwargs)
+            run_case(
+                N_values[0], M_values[0], methods[0], bc_choice=1, quad_rule=1, mute=True, reg_param=reg_param,
+                num_processors=num_processors, use_gpu=use_gpu, time_trials=False, num_runs=1,
+                maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft, eps_finufft=eps_finufft,
+                precond_shift=precond_shift, kde_oversample=kde_oversample, kde_bandwidth=kde_bandwidth, **kwargs
+            )
     except Exception:
         pass
+
+    forward_kwargs = dict(
+        reg_param=reg_param,
+        num_processors=num_processors,
+        use_gpu=use_gpu,
+        time_trials=time_trials,
+        num_runs=num_runs,
+        maxiter_nufft=maxiter_nufft,
+        tol_nufft=tol_nufft,
+        eps_finufft=eps_finufft,
+        precond_shift=precond_shift,
+        kde_oversample=kde_oversample,
+        kde_bandwidth=kde_bandwidth,
+        **kwargs
+    )
 
     results = []
     method_pbar = tqdm(methods, desc=f"Pipeline ({test_type})", disable=False)
@@ -422,7 +462,7 @@ def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_T
             pairs = [(N, M) for N in N_values for M in M_values]
             sub_pbar = tqdm(pairs, desc=f"  {method['label']}", leave=False, disable=False)
             for N, M in sub_pbar:
-                res = run_case(N, M, method, bc_choice=1, quad_rule=1, mute=mute, reg_param=reg_param, **kwargs)
+                res = run_case(N, M, method, bc_choice=1, quad_rule=1, mute=mute, **forward_kwargs)
                 results.append(res)
                 if not mute:
                     print(f"  N={N:4d}, M={M:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
@@ -430,7 +470,7 @@ def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_T
             tasks = [(M, quad, bc) for M in M_values for quad in [1, 2] for bc in [1, 2]]
             sub_pbar = tqdm(tasks, desc=f"  {method['label']}", leave=False, disable=False)
             for M, quad, bc in sub_pbar:
-                res = run_case(fixed_other, M, method, bc_choice=bc, quad_rule=quad, mute=mute, reg_param=reg_param, **kwargs)
+                res = run_case(fixed_other, M, method, bc_choice=bc, quad_rule=quad, mute=mute, **forward_kwargs)
                 results.append(res)
                 q_str = "Trapezoidal" if quad == 1 else "Simpson"
                 bc_str = "Dirichlet" if bc == 1 else "Neumann"
@@ -439,14 +479,14 @@ def run_tests_pipeline(N_values, M_values, fixed_other, methods, test_type="P1_T
         elif test_type == "Accuracy_VaryN":
             sub_pbar = tqdm(N_values, desc=f"  {method['label']}", leave=False, disable=False)
             for N in sub_pbar:
-                res = run_case(N, fixed_other, method, bc_choice=1, quad_rule=1, mute=mute, reg_param=reg_param, **kwargs)
+                res = run_case(N, fixed_other, method, bc_choice=1, quad_rule=1, mute=mute, **forward_kwargs)
                 results.append(res)
                 if not mute:
                     print(f"  N={N:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
         elif test_type == "Accuracy_VaryM":
             sub_pbar = tqdm(M_values, desc=f"  {method['label']}", leave=False, disable=False)
             for M in sub_pbar:
-                res = run_case(fixed_other, M, method, bc_choice=1, quad_rule=1, mute=mute, reg_param=reg_param, **kwargs)
+                res = run_case(fixed_other, M, method, bc_choice=1, quad_rule=1, mute=mute, **forward_kwargs)
                 results.append(res)
                 if not mute:
                     print(f"  M={M:4d} | L2_rel={res['L2_rel']:.3e} | t={res['runtime']:.3f}s")
@@ -923,7 +963,10 @@ RADIAL_METHODS = [
 # Mirrors run_case() but respects rad_unif / rad_mapping.
 # ---------------------------------------------------------
 
-def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False, num_runs=None):
+def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False, reg_param=None,
+                    num_processors=None, use_gpu=None, time_trials=None, num_runs=None,
+                    maxiter_nufft=None, tol_nufft=None, eps_finufft=None,
+                    precond_shift=None, kde_oversample=None, kde_bandwidth=None, **kwargs):
     """
     Like run_case(), but generates the radial grid from method['rad_mapping']
     (nonuniform) or linspace (uniform) based on method['rad_unif'].
@@ -955,20 +998,33 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False, num_runs
     else:
         u_fourier_0 = np.array([])
 
-    actual_reg = resolve_reg_param(GLOBAL_CONFIG.get('reg_param', 'auto'), method, N, M, iAngle)
+    cfg_reg = reg_param if reg_param is not None else GLOBAL_CONFIG.get('reg_param', 'auto')
+    actual_reg = resolve_reg_param(cfg_reg, method, N, M, iAngle)
 
-    n_runs = num_runs if num_runs is not None else (GLOBAL_CONFIG.get('num_runs', NUM_RUNS) if (GLOBAL_CONFIG.get('time_trials', TIME_TRIALS)) else 1)
+    effective_use_gpu = GLOBAL_CONFIG.get('use_gpu', GLOBAL_USE_GPU) if use_gpu is None else bool(use_gpu)
+    effective_time_trials = GLOBAL_CONFIG.get('time_trials', TIME_TRIALS) if time_trials is None else bool(time_trials)
+    n_runs = num_runs if num_runs is not None else (GLOBAL_CONFIG.get('num_runs', NUM_RUNS) if effective_time_trials else 1)
+
+    effective_maxiter = maxiter_nufft if maxiter_nufft is not None else GLOBAL_CONFIG.get('maxiter_nufft', 50)
+    effective_tol = tol_nufft if tol_nufft is not None else GLOBAL_CONFIG.get('tol_nufft', 1e-8)
+    effective_eps = eps_finufft if eps_finufft is not None else GLOBAL_CONFIG.get('eps_finufft', 1e-12)
+    effective_shift = precond_shift if precond_shift is not None else GLOBAL_CONFIG.get('precond_shift', 1e-3)
+    effective_kde_oversample = kde_oversample if kde_oversample is not None else GLOBAL_CONFIG.get('kde_oversample', 4)
+    effective_kde_bandwidth = kde_bandwidth if kde_bandwidth is not None else GLOBAL_CONFIG.get('kde_bandwidth', 1.0)
+    effective_num_procs = num_processors if num_processors is not None else GLOBAL_CONFIG.get('num_processors', None)
 
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        if mute:
+            warnings.simplefilter("ignore")
         runtimes = []
         u_approx = None
         for _ in range(n_runs):
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
+            if effective_use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
 
             t0 = time.perf_counter()
 
@@ -980,21 +1036,24 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False, num_runs
                     rad_unif=rad_unif,
                     azu_unif=solver_azu,
                     use_nudft_angular=nudft_flag,
-                    maxiter_nufft=GLOBAL_CONFIG['maxiter_nufft'], 
-                    tol_nufft=GLOBAL_CONFIG['tol_nufft'],
+                    maxiter_nufft=effective_maxiter, 
+                    tol_nufft=effective_tol,
                     reg_param=actual_reg,
-                    eps_finufft=GLOBAL_CONFIG.get('eps_finufft', 1e-12),
-                    precond_shift=GLOBAL_CONFIG.get('precond_shift', 1e-3),
-                    kde_oversample=GLOBAL_CONFIG.get('kde_oversample', 4),
-                    kde_bandwidth=GLOBAL_CONFIG.get('kde_bandwidth', 1.0),
-                    use_gpu=GLOBAL_CONFIG.get('use_gpu', False)
+                    eps_finufft=effective_eps,
+                    precond_shift=effective_shift,
+                    kde_oversample=effective_kde_oversample,
+                    kde_bandwidth=effective_kde_bandwidth,
+                    num_processors=effective_num_procs,
+                    use_gpu=effective_use_gpu,
+                    **kwargs,
                 )
 
-                try:
-                    import cupy as cp
-                    cp.cuda.Stream.null.synchronize()
-                except Exception:
-                    pass
+                if effective_use_gpu:
+                    try:
+                        import cupy as cp
+                        cp.cuda.Stream.null.synchronize()
+                    except Exception:
+                        pass
 
                 runtimes.append(time.perf_counter() - t0)
 
@@ -1019,7 +1078,7 @@ def run_case_radial(N, M, method, bc_choice=1, quad_rule=1, mute=False, num_runs
 # ---------------------------------------------------------
 
 def run_NM_radial_sweep(N_values, M_values, methods=None,
-                         bc_choice=1, quad_rule=1, mute=False):
+                         bc_choice=1, quad_rule=1, mute=False, **kwargs):
     """
     Sweeps all (N, M) combos for each radial method.
     Returns a DataFrame with columns: name, label, N, M, bc, quad, L2_rel, runtime.
@@ -1033,7 +1092,7 @@ def run_NM_radial_sweep(N_values, M_values, methods=None,
         for N in N_values:
             for M in M_values:
                 r = run_case_radial(N, M, method, bc_choice=bc_choice,
-                                    quad_rule=quad_rule, mute=mute)
+                                    quad_rule=quad_rule, mute=mute, **kwargs)
                 rows.append(r)
                 if not mute:
                     print(f"  N={N:4d}, M={M:4d} | L2_rel={r['L2_rel']:.3e} | t={r['runtime']:.3f}s")
@@ -1044,7 +1103,7 @@ def run_NM_radial_sweep(N_values, M_values, methods=None,
 # Pipeline: BC x quad sweep across radial grid types
 # ---------------------------------------------------------
 
-def run_bc_quad_radial_sweep(N_fixed, M_values, methods=None, mute=False):
+def run_bc_quad_radial_sweep(N_fixed, M_values, methods=None, mute=False, **kwargs):
     """
     For a fixed N, sweeps M x {Trap, Simp} x {Dirichlet, Neumann} for each radial method.
     Returns a DataFrame with added quad_str and bc_str columns.
@@ -1059,7 +1118,7 @@ def run_bc_quad_radial_sweep(N_fixed, M_values, methods=None, mute=False):
             for quad in [1, 2]:
                 for bc in [1, 2]:
                     r = run_case_radial(N_fixed, M, method,
-                                        bc_choice=bc, quad_rule=quad, mute=mute)
+                                        bc_choice=bc, quad_rule=quad, mute=mute, **kwargs)
                     rows.append(r)
                     if not mute:
                         q_s = "Trap" if quad == 1 else "Simp"

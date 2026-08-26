@@ -202,6 +202,7 @@ def run_radial_benchmark_case(
     quad_rule=2,
     num_processors=None,
     use_gpu=None,
+    time_trials=None,
     num_runs=None,
     **kwargs,
 ):
@@ -213,6 +214,7 @@ def run_radial_benchmark_case(
         rad_unif = 0 for non-uniform radial grid
     """
     actual_use_gpu = GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
+    effective_time_trials = TIME_TRIALS if time_trials is None else bool(time_trials)
     R = problem["R"]
     theta_solver = generate_uniform_azimuthal(N)
 
@@ -234,7 +236,7 @@ def run_radial_benchmark_case(
     rad_unif_flag = 1 if is_uniform else 0
 
     # 2. Timed Poisson Solve
-    n_runs = num_runs if num_runs is not None else (NUM_RUNS if TIME_TRIALS else 1)
+    n_runs = num_runs if num_runs is not None else (NUM_RUNS if effective_time_trials else 1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
@@ -301,7 +303,19 @@ def run_radial_benchmark_case(
     }
 
 
-def run_radial_grid_sweep(problem, N, M_values, rad_kinds, quad_rule=2, num_processors=None, use_gpu=None, **kwargs):
+def run_radial_grid_sweep(
+    problem,
+    N,
+    M_values,
+    rad_kinds,
+    quad_rule=2,
+    bc_choice=1,
+    num_processors=None,
+    use_gpu=None,
+    time_trials=None,
+    num_runs=None,
+    **kwargs,
+):
     """
     Run M-refinement study across multiple radial mesh choices for a fixed N.
     """
@@ -316,9 +330,12 @@ def run_radial_grid_sweep(problem, N, M_values, rad_kinds, quad_rule=2, num_proc
                 r_m=r_warmup,
                 problem=problem,
                 rad_kind=rad_kinds[0][1],
+                bc_choice=bc_choice,
                 quad_rule=quad_rule,
                 num_processors=num_processors,
                 use_gpu=actual_use_gpu,
+                time_trials=False,
+                num_runs=1,
                 **kwargs,
             )
     except Exception:
@@ -339,9 +356,12 @@ def run_radial_grid_sweep(problem, N, M_values, rad_kinds, quad_rule=2, num_proc
                 r_m=r_m,
                 problem=problem,
                 rad_kind=label,
+                bc_choice=bc_choice,
                 quad_rule=quad_rule,
                 num_processors=num_processors,
                 use_gpu=actual_use_gpu,
+                time_trials=time_trials,
+                num_runs=num_runs,
                 **kwargs,
             )
             rows.append(res)
@@ -350,7 +370,19 @@ def run_radial_grid_sweep(problem, N, M_values, rad_kinds, quad_rule=2, num_proc
     return pd.DataFrame(rows)
 
 
-def run_nxm_grid_sweep(problem, N_values, M_values, rad_kinds, quad_rule=2, num_processors=None, use_gpu=None, **kwargs):
+def run_nxm_grid_sweep(
+    problem,
+    N_values,
+    M_values,
+    rad_kinds,
+    quad_rule=2,
+    bc_choice=1,
+    num_processors=None,
+    use_gpu=None,
+    time_trials=None,
+    num_runs=None,
+    **kwargs,
+):
     """
     Run full N x M grid sweep across angular counts N and radial counts M.
     """
@@ -365,9 +397,12 @@ def run_nxm_grid_sweep(problem, N_values, M_values, rad_kinds, quad_rule=2, num_
                 r_m=r_warmup,
                 problem=problem,
                 rad_kind=rad_kinds[0][1],
+                bc_choice=bc_choice,
                 quad_rule=quad_rule,
                 num_processors=num_processors,
                 use_gpu=actual_use_gpu,
+                time_trials=False,
+                num_runs=1,
                 **kwargs,
             )
     except Exception:
@@ -389,9 +424,12 @@ def run_nxm_grid_sweep(problem, N_values, M_values, rad_kinds, quad_rule=2, num_
                     r_m=r_m,
                     problem=problem,
                     rad_kind=label,
+                    bc_choice=bc_choice,
                     quad_rule=quad_rule,
                     num_processors=num_processors,
                     use_gpu=actual_use_gpu,
+                    time_trials=time_trials,
+                    num_runs=num_runs,
                     **kwargs,
                 )
                 rows.append(res)

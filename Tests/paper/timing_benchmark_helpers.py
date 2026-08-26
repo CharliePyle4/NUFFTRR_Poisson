@@ -142,11 +142,15 @@ def timed_poisson_solve(f_vals, g_vals, u_fourier_0, N, M, r_m, theta_j, R,
                         quad_rule, BC_choice, rad_unif, grid_type,
                         use_nudft_angular=False, maxiter_nufft=50, tol_nufft=1e-8,
                         reg_param=1e-12, eps_finufft=1e-12, num_processors=None,
-                        use_gpu=False, **kwargs):
+                        use_gpu=None, time_trials=None, num_runs=None, **kwargs):
     """
     Executes poisson_solver with multi-trial precision timing if TIME_TRIALS=True.
     Returns: (u_approx, elapsed_sec, min_sec, mean_sec)
     """
+    actual_use_gpu = _GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
+    effective_time_trials = _GLOBAL_TIME_TRIALS if time_trials is None else bool(time_trials)
+    n_runs = num_runs if num_runs is not None else (_GLOBAL_NUM_RUNS if effective_time_trials else 1)
+
     solve_kwargs = dict(
         f_values=f_vals,
         g_values=g_vals,
@@ -166,16 +170,15 @@ def timed_poisson_solve(f_vals, g_vals, u_fourier_0, N, M, r_m, theta_j, R,
         reg_param=reg_param,
         eps_finufft=eps_finufft,
         num_processors=num_processors,
-        use_gpu=use_gpu,
+        use_gpu=actual_use_gpu,
         **kwargs
     )
 
-    n_runs = _GLOBAL_NUM_RUNS if _GLOBAL_TIME_TRIALS else 1
     runtimes = []
     u_approx = None
 
     for i in range(n_runs):
-        if use_gpu:
+        if actual_use_gpu:
             try:
                 import cupy as cp
                 cp.cuda.Stream.null.synchronize()
@@ -183,20 +186,21 @@ def timed_poisson_solve(f_vals, g_vals, u_fourier_0, N, M, r_m, theta_j, R,
                 pass
         t0 = time.perf_counter()
         res = poisson_solver(**solve_kwargs)
-        if use_gpu:
+        if actual_use_gpu:
             try:
                 import cupy as cp
                 cp.cuda.Stream.null.synchronize()
             except Exception:
                 pass
-        t1 = time.perf_counter()
-        runtimes.append(t1 - t0)
-        if u_approx is None:
+        t_elapsed = time.perf_counter() - t0
+        runtimes.append(t_elapsed)
+        if i == 0:
             u_approx = res
 
-    elapsed = float(np.min(runtimes)) if TIME_TRIALS else float(runtimes[0])
-    min_time = float(np.min(runtimes))
+    min_time = min(runtimes)
     mean_time = float(np.mean(runtimes))
+    elapsed = min_time
+
     return u_approx, elapsed, min_time, mean_time
 
 
@@ -204,10 +208,12 @@ def timed_poisson_solve(f_vals, g_vals, u_fourier_0, N, M, r_m, theta_j, R,
 # Suite 1: Uniform Grid Benchmark
 # ==============================================================================
 def run_uniform_benchmark(N_list, M_list, problem=None, R=1.0, quad_rule=1,
-                          BC_choice=1, perimeter_only=False, num_processors=None, use_gpu=False):
+                          BC_choice=1, perimeter_only=False, num_processors=None,
+                          use_gpu=None, time_trials=None, num_runs=None, **kwargs):
     """
     Benchmark Uniform FFT Poisson Solver across a 2D (N x M) grid matrix.
     """
+    actual_use_gpu = _GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     if problem is None:
         problem = get_benchmark_problem(R=R)
 
@@ -252,7 +258,10 @@ def run_uniform_benchmark(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             rad_unif=1,
             grid_type=1,
             num_processors=num_processors,
-            use_gpu=use_gpu,
+            use_gpu=actual_use_gpu,
+            time_trials=time_trials,
+            num_runs=num_runs,
+            **kwargs,
         )
 
         linf, linf_rel, l2, l2_rel = compute_error_metrics(u_approx, u_exact, r_m, theta_j)
@@ -271,7 +280,7 @@ def run_uniform_benchmark(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "L_inf_Error": linf,
             "L2_Error": l2,
             "Rel_L2_Error": l2_rel,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": "GPU" if actual_use_gpu else "CPU",
         })
         pbar.update(1)
 
@@ -288,7 +297,8 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
                        perimeter_only=False,
                        toeplitz_grid="jittered", toeplitz_kwargs=None,
                        cg_grid="sine_perturbed", cg_kwargs=None,
-                       num_processors=None, use_gpu=False):
+                       num_processors=None, use_gpu=None,
+                       time_trials=None, num_runs=None, **kwargs):
     """
     Executes the unified 5-method benchmark across (N x M):
       1. Uniform FFT on Uniform Grid
@@ -297,6 +307,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
       4. NUDFT on CG Nonuniform Mesh (default Sine-Perturbed, amplitude=0.20, mode=2)
       5. NUFFT CG (PCGLS) on CG Nonuniform Mesh
     """
+    actual_use_gpu = _GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     if problem is None:
         problem = get_benchmark_problem(R=R)
 
@@ -321,7 +332,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
 
     records = []
     total_solves = len(tasks) * 4
-    pbar = tqdm(total=total_solves, desc=f"Benchmarking 4 Solvers [{'GPU' if use_gpu else 'CPU'}]")
+    pbar = tqdm(total=total_solves, desc=f"Benchmarking 4 Solvers [{'GPU' if actual_use_gpu else 'CPU'}]")
 
     for N, M in tasks:
         r_m = generate_uniform_radial(M, R)
@@ -341,7 +352,8 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             f_vals=fu, g_vals=gu, u_fourier_0=u_fourier_0_dir,
             N=N, M=M, r_m=r_m, theta_j=th_unif, R=R,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=1,
-            num_processors=num_processors, use_gpu=use_gpu
+            num_processors=num_processors, use_gpu=actual_use_gpu,
+            time_trials=time_trials, num_runs=num_runs, **kwargs
         )
         linf_ufft, _, l2_ufft, rel_l2_ufft = compute_error_metrics(u_ufft, uex_u, r_m, th_unif)
         records.append({
@@ -351,7 +363,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "Time_sec": t_ufft, "Time_ms": t_ufft * 1000.0,
             "Min_Time_sec": min_ufft, "Mean_Time_sec": mean_ufft,
             "L_inf_Error": linf_ufft, "L2_Error": l2_ufft, "Rel_L2_Error": rel_l2_ufft,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": "GPU" if actual_use_gpu else "CPU",
         })
         pbar.update(1)
 
@@ -370,7 +382,8 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             N=N, M=M, r_m=r_m, theta_j=th_toep, R=R,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
             use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu
+            num_processors=num_processors, use_gpu=actual_use_gpu,
+            time_trials=time_trials, num_runs=num_runs, **kwargs
         )
         linf_nd_t, _, l2_nd_t, rel_l2_nd_t = compute_error_metrics(u_nd_t, uex_t, r_m, th_toep)
         records.append({
@@ -380,7 +393,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "Time_sec": t_nd_t, "Time_ms": t_nd_t * 1000.0,
             "Min_Time_sec": min_nd_t, "Mean_Time_sec": mean_nd_t,
             "L_inf_Error": linf_nd_t, "L2_Error": l2_nd_t, "Rel_L2_Error": rel_l2_nd_t,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": "GPU" if actual_use_gpu else "CPU",
         })
         pbar.update(1)
 
@@ -391,7 +404,8 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
             use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
             reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu
+            num_processors=num_processors, use_gpu=actual_use_gpu,
+            time_trials=time_trials, num_runs=num_runs, **kwargs
         )
         linf_nf_t, _, l2_nf_t, rel_l2_nf_t = compute_error_metrics(u_nf_t, uex_t, r_m, th_toep)
         records.append({
@@ -401,7 +415,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "Time_sec": t_nf_t, "Time_ms": t_nf_t * 1000.0,
             "Min_Time_sec": min_nf_t, "Mean_Time_sec": mean_nf_t,
             "L_inf_Error": linf_nf_t, "L2_Error": l2_nf_t, "Rel_L2_Error": rel_l2_nf_t,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": "GPU" if actual_use_gpu else "CPU",
         })
         pbar.update(1)
 
@@ -420,7 +434,8 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
             use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
             reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu
+            num_processors=num_processors, use_gpu=actual_use_gpu,
+            time_trials=time_trials, num_runs=num_runs, **kwargs
         )
         linf_nf_c, _, l2_nf_c, rel_l2_nf_c = compute_error_metrics(u_nf_c, uex_c, r_m, th_cg)
         records.append({
@@ -430,7 +445,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "Time_sec": t_nf_c, "Time_ms": t_nf_c * 1000.0,
             "Min_Time_sec": min_nf_c, "Mean_Time_sec": mean_nf_c,
             "L_inf_Error": linf_nf_c, "L2_Error": l2_nf_c, "Rel_L2_Error": rel_l2_nf_c,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": "GPU" if actual_use_gpu else "CPU",
         })
         pbar.update(1)
 
