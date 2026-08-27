@@ -352,10 +352,8 @@ def run_all_benchmarks(
     kde_oversample=4,
     kde_bandwidth=1.0,
     perimeter_only=False,
-    toeplitz_grid="jittered",
-    toeplitz_kwargs=None,
-    cg_grid="warped",
-    cg_kwargs=None,
+    nonuniform_grid="jittered",
+    nonuniform_kwargs=None,
     num_processors=None,
     use_gpu=False,
     time_trials=None,
@@ -363,32 +361,29 @@ def run_all_benchmarks(
     **kwargs,
 ):
     """
-    Executes the unified 5-method benchmark across (N x M):
+    Executes the unified 4-method benchmark across (N x M):
       1. Uniform FFT on Uniform Grid
-      2. NUDFT on Toeplitz Nonuniform Mesh (default Jittered, delta=0.25)
-      3. NUFFT Toeplitz on Toeplitz Nonuniform Mesh
-      4. NUDFT on CG Nonuniform Mesh (default Warped or Sine-Perturbed)
-      5. NUFFT CG (PCGLS) on CG Nonuniform Mesh
+      2. NUDFT on Nonuniform Mesh (default Jittered, delta=0.25)
+      3. NUFFT Toeplitz on the SAME Nonuniform Mesh
+      4. NUFFT CG (PCGLS) on the SAME Nonuniform Mesh
     """
     if problem is None:
         problem = get_benchmark_problem(R=R)
 
-    if toeplitz_grid is None:
-        toeplitz_grid = "jittered"
-    if toeplitz_kwargs is None:
-        toeplitz_kwargs = {"jitter_fraction": 0.25} if "jitter" in toeplitz_grid else {}
+    # Handle backward compatibility aliases
+    if "toeplitz_grid" in kwargs and nonuniform_grid == "jittered":
+        nonuniform_grid = kwargs.pop("toeplitz_grid")
+    if "toeplitz_kwargs" in kwargs and nonuniform_kwargs is None:
+        nonuniform_kwargs = kwargs.pop("toeplitz_kwargs")
+    if "cg_grid" in kwargs:
+        kwargs.pop("cg_grid")
+    if "cg_kwargs" in kwargs:
+        kwargs.pop("cg_kwargs")
 
-    if cg_grid is None:
-        cg_grid = "warped"
-    if cg_kwargs is None:
-        if "warped" in cg_grid or "conformal" in cg_grid:
-            cg_kwargs = {"eps1": 0.04, "eps2": -0.02}
-        elif "sine" in cg_grid:
-            cg_kwargs = {"amplitude": 0.20, "mode": 2}
-        elif "jitter" in cg_grid:
-            cg_kwargs = {"jitter_fraction": 0.25}
-        else:
-            cg_kwargs = {}
+    if nonuniform_grid is None:
+        nonuniform_grid = "jittered"
+    if nonuniform_kwargs is None:
+        nonuniform_kwargs = {"jitter_fraction": 0.25} if "jitter" in nonuniform_grid else {}
 
     u_exact_func = problem["u"]
     f_func = problem["f"]
@@ -407,8 +402,8 @@ def run_all_benchmarks(
     backend_label = "GPU" if use_gpu else "CPU"
 
     records = []
-    total_solves = len(tasks) * 5
-    pbar = tqdm(total=total_solves, desc=f"Benchmarking 5 Solvers [{backend_label}]", file=sys.stdout, mininterval=0.1, leave=True)
+    total_solves = len(tasks) * 4
+    pbar = tqdm(total=total_solves, desc=f"Benchmarking 4 Solvers [{backend_label}]", file=sys.stdout, mininterval=0.1, leave=True)
 
     for N, M in tasks:
         r_m = generate_uniform_radial(M, R)
@@ -444,39 +439,43 @@ def run_all_benchmarks(
         pbar.update(1)
 
         # -------------------------------------------------------------
-        # 2 & 3. Toeplitz Mesh -> NUDFT & NUFFT Toeplitz
+        # Shared Nonuniform Mesh for all 3 Nonuniform Solvers
         # -------------------------------------------------------------
-        th_toep = generate_benchmark_azimuthal_grid(toeplitz_grid, N, **toeplitz_kwargs)
-        xt, yt = generate_cartesian_grid_on_disk(th_toep, r_m)
-        ft = f_func(xt, yt)
-        gt = g_func(xt[:, -1], yt[:, -1])
-        uex_t = u_exact_func(xt, yt)
+        th_nu = generate_benchmark_azimuthal_grid(nonuniform_grid, N, **nonuniform_kwargs)
+        x_nu, y_nu = generate_cartesian_grid_on_disk(th_nu, r_m)
+        f_nu = f_func(x_nu, y_nu)
+        g_nu = g_func(x_nu[:, -1], y_nu[:, -1])
+        uex_nu = u_exact_func(x_nu, y_nu)
 
-        # (a) NUDFT on Toeplitz Mesh
-        u_nd_t, t_nd_t, min_nd_t, mean_nd_t = timed_poisson_solve(
-            f_vals=ft, g_vals=gt, u_fourier_0=u_fourier_0_nu,
-            N=N, M=M, r_m=r_m, theta_j=th_toep, R=R,
+        # -------------------------------------------------------------
+        # 2. Nonuniform Grid -> NUDFT (Direct Solver)
+        # -------------------------------------------------------------
+        u_nd, t_nd, min_nd, mean_nd = timed_poisson_solve(
+            f_vals=f_nu, g_vals=g_nu, u_fourier_0=u_fourier_0_nu,
+            N=N, M=M, r_m=r_m, theta_j=th_nu, R=R,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
             use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
             num_processors=num_processors, use_gpu=use_gpu,
             time_trials=time_trials, num_runs=num_runs, **kwargs
         )
-        linf_nd_t, _, l2_nd_t, rel_l2_nd_t = compute_error_metrics(u_nd_t, uex_t, r_m, th_toep)
+        linf_nd, _, l2_nd, rel_l2_nd = compute_error_metrics(u_nd, uex_nu, r_m, th_nu)
         records.append({
             "N": N, "M": M, "Total_Points": N * M,
-            "Grid_Category": "Toeplitz Mesh", "Grid_Type": toeplitz_grid,
-            "Solver": "NUDFT (Toeplitz Mesh)",
-            "Time_sec": t_nd_t, "Time_ms": t_nd_t * 1000.0,
-            "Min_Time_sec": min_nd_t, "Mean_Time_sec": mean_nd_t,
-            "L_inf_Error": linf_nd_t, "L2_Error": l2_nd_t, "Rel_L2_Error": rel_l2_nd_t,
+            "Grid_Category": "Nonuniform Grid", "Grid_Type": nonuniform_grid,
+            "Solver": "NUDFT",
+            "Time_sec": t_nd, "Time_ms": t_nd * 1000.0,
+            "Min_Time_sec": min_nd, "Mean_Time_sec": mean_nd,
+            "L_inf_Error": linf_nd, "L2_Error": l2_nd, "Rel_L2_Error": rel_l2_nd,
             "Backend": backend_label,
         })
         pbar.update(1)
 
-        # (b) NUFFT Toeplitz on Toeplitz Mesh
+        # -------------------------------------------------------------
+        # 3. Nonuniform Grid -> NUFFT Toeplitz
+        # -------------------------------------------------------------
         u_nf_t, t_nf_t, min_nf_t, mean_nf_t = timed_poisson_solve(
-            f_vals=ft, g_vals=gt, u_fourier_0=u_fourier_0_nu,
-            N=N, M=M, r_m=r_m, theta_j=th_toep, R=R,
+            f_vals=f_nu, g_vals=g_nu, u_fourier_0=u_fourier_0_nu,
+            N=N, M=M, r_m=r_m, theta_j=th_nu, R=R,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
             use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
             reg_param=reg_param, eps_finufft=eps_finufft,
@@ -484,10 +483,10 @@ def run_all_benchmarks(
             num_processors=num_processors, use_gpu=use_gpu,
             time_trials=time_trials, num_runs=num_runs, **kwargs
         )
-        linf_nf_t, _, l2_nf_t, rel_l2_nf_t = compute_error_metrics(u_nf_t, uex_t, r_m, th_toep)
+        linf_nf_t, _, l2_nf_t, rel_l2_nf_t = compute_error_metrics(u_nf_t, uex_nu, r_m, th_nu)
         records.append({
             "N": N, "M": M, "Total_Points": N * M,
-            "Grid_Category": "Toeplitz Mesh", "Grid_Type": toeplitz_grid,
+            "Grid_Category": "Nonuniform Grid", "Grid_Type": nonuniform_grid,
             "Solver": "NUFFT Toeplitz",
             "Time_sec": t_nf_t, "Time_ms": t_nf_t * 1000.0,
             "Min_Time_sec": min_nf_t, "Mean_Time_sec": mean_nf_t,
@@ -497,39 +496,11 @@ def run_all_benchmarks(
         pbar.update(1)
 
         # -------------------------------------------------------------
-        # 4 & 5. CG Mesh -> NUDFT & NUFFT CG (PCGLS)
+        # 4. Nonuniform Grid -> NUFFT CG (PCGLS)
         # -------------------------------------------------------------
-        th_cg = generate_benchmark_azimuthal_grid(cg_grid, N, **cg_kwargs)
-        xc, yc = generate_cartesian_grid_on_disk(th_cg, r_m)
-        fc = f_func(xc, yc)
-        gc = g_func(xc[:, -1], yc[:, -1])
-        uex_c = u_exact_func(xc, yc)
-
-        # (a) NUDFT on CG Mesh
-        u_nd_c, t_nd_c, min_nd_c, mean_nd_c = timed_poisson_solve(
-            f_vals=fc, g_vals=gc, u_fourier_0=u_fourier_0_nu,
-            N=N, M=M, r_m=r_m, theta_j=th_cg, R=R,
-            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
-            use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu,
-            time_trials=time_trials, num_runs=num_runs, **kwargs
-        )
-        linf_nd_c, _, l2_nd_c, rel_l2_nd_c = compute_error_metrics(u_nd_c, uex_c, r_m, th_cg)
-        records.append({
-            "N": N, "M": M, "Total_Points": N * M,
-            "Grid_Category": "CG Mesh", "Grid_Type": cg_grid,
-            "Solver": "NUDFT (CG Mesh)",
-            "Time_sec": t_nd_c, "Time_ms": t_nd_c * 1000.0,
-            "Min_Time_sec": min_nd_c, "Mean_Time_sec": mean_nd_c,
-            "L_inf_Error": linf_nd_c, "L2_Error": l2_nd_c, "Rel_L2_Error": rel_l2_nd_c,
-            "Backend": backend_label,
-        })
-        pbar.update(1)
-
-        # (b) NUFFT CG (PCGLS) on CG Mesh
         u_nf_c, t_nf_c, min_nf_c, mean_nf_c = timed_poisson_solve(
-            f_vals=fc, g_vals=gc, u_fourier_0=u_fourier_0_nu,
-            N=N, M=M, r_m=r_m, theta_j=th_cg, R=R,
+            f_vals=f_nu, g_vals=g_nu, u_fourier_0=u_fourier_0_nu,
+            N=N, M=M, r_m=r_m, theta_j=th_nu, R=R,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
             use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
             reg_param=reg_param, eps_finufft=eps_finufft,
@@ -537,10 +508,10 @@ def run_all_benchmarks(
             num_processors=num_processors, use_gpu=use_gpu,
             time_trials=time_trials, num_runs=num_runs, **kwargs
         )
-        linf_nf_c, _, l2_nf_c, rel_l2_nf_c = compute_error_metrics(u_nf_c, uex_c, r_m, th_cg)
+        linf_nf_c, _, l2_nf_c, rel_l2_nf_c = compute_error_metrics(u_nf_c, uex_nu, r_m, th_nu)
         records.append({
             "N": N, "M": M, "Total_Points": N * M,
-            "Grid_Category": "CG Mesh", "Grid_Type": cg_grid,
+            "Grid_Category": "Nonuniform Grid", "Grid_Type": nonuniform_grid,
             "Solver": "NUFFT CG (PCGLS)",
             "Time_sec": t_nf_c, "Time_ms": t_nf_c * 1000.0,
             "Min_Time_sec": min_nf_c, "Mean_Time_sec": mean_nf_c,
@@ -568,10 +539,8 @@ def run_cpu_and_gpu_benchmarks(
     kde_oversample=4,
     kde_bandwidth=1.0,
     perimeter_only=False,
-    toeplitz_grid="jittered",
-    toeplitz_kwargs=None,
-    cg_grid="warped",
-    cg_kwargs=None,
+    nonuniform_grid="jittered",
+    nonuniform_kwargs=None,
     num_processors=None,
     time_trials=None,
     num_runs=None,
@@ -579,7 +548,7 @@ def run_cpu_and_gpu_benchmarks(
     **kwargs,
 ):
     """
-    Convenience runner executing the full 5-solver study on CPU and GPU (if available).
+    Convenience runner executing the full 4-solver study on CPU and GPU (if available).
     Returns: (df_cpu, df_gpu, df_combined)
     """
     common_args = dict(
@@ -597,10 +566,8 @@ def run_cpu_and_gpu_benchmarks(
         kde_oversample=kde_oversample,
         kde_bandwidth=kde_bandwidth,
         perimeter_only=perimeter_only,
-        toeplitz_grid=toeplitz_grid,
-        toeplitz_kwargs=toeplitz_kwargs,
-        cg_grid=cg_grid,
-        cg_kwargs=cg_kwargs,
+        nonuniform_grid=nonuniform_grid,
+        nonuniform_kwargs=nonuniform_kwargs,
         time_trials=time_trials,
         num_runs=num_runs,
         **kwargs,
@@ -640,15 +607,16 @@ def run_cpu_and_gpu_benchmarks(
 # ==============================================================================
 def display_benchmark_tables(df, N_values=None, M_values=None, title_prefix=""):
     """
-    Display comprehensive N x M timing and accuracy tables across all 5 methods.
+    Display comprehensive N x M timing and accuracy tables across all methods.
     Supports single-backend or combined (CPU & GPU) DataFrames.
     """
     solver_order = [
         "Uniform FFT",
-        "NUDFT (Toeplitz Mesh)",
+        "NUDFT",
         "NUFFT Toeplitz",
-        "NUDFT (CG Mesh)",
         "NUFFT CG (PCGLS)",
+        "NUDFT (Toeplitz Mesh)",
+        "NUDFT (CG Mesh)",
     ]
 
     def fmt_time(x):
@@ -713,26 +681,29 @@ def display_benchmark_tables(df, N_values=None, M_values=None, title_prefix=""):
 # ==============================================================================
 # Unified 2x2 Log-Log Visualization Functions
 # ==============================================================================
-def plot_grid_distributions(N=64, R=1.0, toeplitz_grid="jittered", toeplitz_kwargs=None, cg_grid="warped", cg_kwargs=None):
+def plot_grid_distributions(N=64, R=1.0, nonuniform_grid="jittered", nonuniform_kwargs=None, **kwargs):
     """
-    Plot polar scatter representations of the tested angular meshes.
+    Plot polar scatter representations of the tested angular meshes:
+    1. Uniform Grid (Uniform FFT)
+    2. Nonuniform Grid (NUDFT, NUFFT Toeplitz, NUFFT CG)
     """
-    if toeplitz_kwargs is None:
-        toeplitz_kwargs = {"jitter_fraction": 0.25}
-    if cg_kwargs is None:
-        cg_kwargs = {"eps1": 0.04, "eps2": -0.02} if ("warped" in cg_grid or "conformal" in cg_grid) else {"amplitude": 0.08, "mode": 2}
+    if "toeplitz_grid" in kwargs and nonuniform_grid == "jittered":
+        nonuniform_grid = kwargs.get("toeplitz_grid")
+    if "toeplitz_kwargs" in kwargs and nonuniform_kwargs is None:
+        nonuniform_kwargs = kwargs.get("toeplitz_kwargs")
 
-    toep_title = f"{toeplitz_grid.replace('_', ' ').title()} (Toeplitz Mesh)"
-    cg_title = f"{cg_grid.replace('_', ' ').title()} (CG Mesh)"
+    if nonuniform_kwargs is None:
+        nonuniform_kwargs = {"jitter_fraction": 0.25} if "jitter" in nonuniform_grid else {}
+
+    nu_title = f"{nonuniform_grid.replace('_', ' ').title()} (Shared Nonuniform Mesh)"
 
     grid_types = [
         ("Uniform Grid (Uniform FFT)", generate_benchmark_azimuthal_grid("uniform", N)),
-        (toep_title, generate_benchmark_azimuthal_grid(toeplitz_grid, N, **toeplitz_kwargs)),
-        (cg_title, generate_benchmark_azimuthal_grid(cg_grid, N, **cg_kwargs)),
+        (nu_title, generate_benchmark_azimuthal_grid(nonuniform_grid, N, **nonuniform_kwargs)),
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), subplot_kw={'projection': 'polar'})
-    colors = ['#1f77b4', '#2ca02c', '#d62728']
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), subplot_kw={'projection': 'polar'})
+    colors = ['#1f77b4', '#d62728']
 
     for ax, (title, thetas), color in zip(axes, grid_types, colors):
         r_circ = np.ones_like(thetas) * R
@@ -749,7 +720,7 @@ def plot_grid_distributions(N=64, R=1.0, toeplitz_grid="jittered", toeplitz_kwar
 
 def plot_runtime_2x2(df, N_values=None, M_values=None, backend=None, use_gpu=None, title="Runtime Scaling Analysis"):
     """
-    Unified 2x2 Log-Log Runtime Figure (in Seconds) plotting all 5 solvers.
+    Unified 2x2 Log-Log Runtime Figure (in Seconds) plotting the 4 solvers.
       (0, 0): Runtime vs N for min(M)
       (0, 1): Runtime vs N for max(M)
       (1, 0): Runtime vs M for min(N)
@@ -790,9 +761,10 @@ def plot_runtime_2x2(df, N_values=None, M_values=None, backend=None, use_gpu=Non
 
     solver_styles = {
         "Uniform FFT": ("#1f77b4", "o", "-"),
+        "NUDFT": ("#2ca02c", "s", "--"),
         "NUDFT (Toeplitz Mesh)": ("#2ca02c", "s", "--"),
         "NUFFT Toeplitz": ("#17becf", "s", "-"),
-        "NUDFT (CG Mesh)": ("#d62728", "^", "--"),
+        "NUDFT (CG Mesh)": ("#9467bd", "^", "--"),
         "NUFFT CG (PCGLS)": ("#ff7f0e", "^", "-"),
     }
 
@@ -827,7 +799,7 @@ def plot_runtime_2x2(df, N_values=None, M_values=None, backend=None, use_gpu=Non
 
 def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", backend=None, use_gpu=None, title="Accuracy Scaling Analysis"):
     """
-    Unified 2x2 Log-Log Accuracy Figure plotting all 5 solvers.
+    Unified 2x2 Log-Log Accuracy Figure plotting the 4 solvers.
       (0, 0): L_inf Error vs N for min(M)
       (0, 1): L_inf Error vs N for max(M)
       (1, 0): L_inf Error vs M for min(N)
@@ -870,9 +842,10 @@ def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", ba
 
     solver_styles = {
         "Uniform FFT": ("#1f77b4", "o", "-"),
+        "NUDFT": ("#2ca02c", "s", "--"),
         "NUDFT (Toeplitz Mesh)": ("#2ca02c", "s", "--"),
         "NUFFT Toeplitz": ("#17becf", "s", "-"),
-        "NUDFT (CG Mesh)": ("#d62728", "^", "--"),
+        "NUDFT (CG Mesh)": ("#9467bd", "^", "--"),
         "NUFFT CG (PCGLS)": ("#ff7f0e", "^", "-"),
     }
 
