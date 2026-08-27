@@ -122,9 +122,9 @@ def generate_benchmark_azimuthal_grid(grid_name, N, **kwargs):
         amps = kwargs.get("amps", (0.04, 0.02))
         from Poisson_Solver.grids import generate_multipole_azimuthal
         return generate_multipole_azimuthal(N, poles=poles, amps=amps)
-    elif name_lower in ("warped", "conformal"):
-        eps1 = kwargs.get("eps1", 0.08)
-        eps2 = kwargs.get("eps2", -0.04)
+    elif name_lower in ("warped", "conformal", "cg_mesh"):
+        eps1 = kwargs.get("eps1", 0.04)
+        eps2 = kwargs.get("eps2", -0.02)
         from Poisson_Solver.grids import generate_warped_azimuthal
         return generate_warped_azimuthal(N, eps1=eps1, eps2=eps2)
     elif name_lower in ("chebyshev", "chebyshev_angular"):
@@ -373,10 +373,22 @@ def run_all_benchmarks(
     if problem is None:
         problem = get_benchmark_problem(R=R)
 
+    if toeplitz_grid is None:
+        toeplitz_grid = "jittered"
     if toeplitz_kwargs is None:
         toeplitz_kwargs = {"jitter_fraction": 0.25} if "jitter" in toeplitz_grid else {}
+
+    if cg_grid is None:
+        cg_grid = "warped"
     if cg_kwargs is None:
-        cg_kwargs = {"amplitude": 0.20, "mode": 2} if "sine" in cg_grid else {}
+        if "warped" in cg_grid or "conformal" in cg_grid:
+            cg_kwargs = {"eps1": 0.04, "eps2": -0.02}
+        elif "sine" in cg_grid:
+            cg_kwargs = {"amplitude": 0.08, "mode": 2}
+        elif "jitter" in cg_grid:
+            cg_kwargs = {"jitter_fraction": 0.25}
+        else:
+            cg_kwargs = {}
 
     u_exact_func = problem["u"]
     f_func = problem["f"]
@@ -634,7 +646,7 @@ def run_cpu_and_gpu_benchmarks(
     perimeter_only=False,
     toeplitz_grid="jittered",
     toeplitz_kwargs=None,
-    cg_grid="sine_perturbed",
+    cg_grid="warped",
     cg_kwargs=None,
     num_processors=None,
     time_trials=None,
@@ -777,14 +789,22 @@ def display_benchmark_tables(df, N_values=None, M_values=None, title_prefix=""):
 # ==============================================================================
 # Unified 2x2 Log-Log Visualization Functions
 # ==============================================================================
-def plot_grid_distributions(N=64, R=1.0):
+def plot_grid_distributions(N=64, R=1.0, toeplitz_grid="jittered", toeplitz_kwargs=None, cg_grid="warped", cg_kwargs=None):
     """
     Plot polar scatter representations of the tested angular meshes.
     """
+    if toeplitz_kwargs is None:
+        toeplitz_kwargs = {"jitter_fraction": 0.25}
+    if cg_kwargs is None:
+        cg_kwargs = {"eps1": 0.04, "eps2": -0.02} if ("warped" in cg_grid or "conformal" in cg_grid) else {"amplitude": 0.08, "mode": 2}
+
+    toep_title = f"{toeplitz_grid.replace('_', ' ').title()} (Toeplitz Mesh)"
+    cg_title = f"{cg_grid.replace('_', ' ').title()} (CG Mesh)"
+
     grid_types = [
         ("Uniform Grid (Uniform FFT)", generate_benchmark_azimuthal_grid("uniform", N)),
-        ("Jittered Grid (Toeplitz, delta=0.25)", generate_benchmark_azimuthal_grid("jittered", N, jitter_fraction=0.25)),
-        ("Sine-Perturbed Grid (CG, a=0.20)", generate_benchmark_azimuthal_grid("sine_perturbed", N, amplitude=0.20, mode=2)),
+        (toep_title, generate_benchmark_azimuthal_grid(toeplitz_grid, N, **toeplitz_kwargs)),
+        (cg_title, generate_benchmark_azimuthal_grid(cg_grid, N, **cg_kwargs)),
     ]
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), subplot_kw={'projection': 'polar'})
