@@ -922,7 +922,7 @@ def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", ba
 
     metric_name = r"$L_\infty$ Error" if "inf" in metric.lower() else r"$L_2$ Error"
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey="row")
 
     solver_styles = {
         "Uniform FFT": ("#1f77b4", "o", "-"),
