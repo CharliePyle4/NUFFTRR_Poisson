@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
-from IPython.display import display
+from IPython.display import display, HTML
 from tqdm.auto import tqdm
 
 # Ensure repository root is in sys.path
@@ -32,14 +32,14 @@ from Poisson_Solver.poisson_solver import poisson_solver
 # ==============================================================================
 # Multi-Run Timing Configuration
 # ==============================================================================
-TIME_TRIALS = False  # Set to True to run each solve multiple times and record min runtime
-NUM_RUNS = 5
+_GLOBAL_TIME_TRIALS = False
+_GLOBAL_NUM_RUNS = 5
 
 def set_timing_config(time_trials=False, num_runs=5):
     """Globally configure multi-trial benchmark timing."""
-    global TIME_TRIALS, NUM_RUNS
-    TIME_TRIALS = bool(time_trials)
-    NUM_RUNS = int(num_runs) if time_trials else 1
+    global _GLOBAL_TIME_TRIALS, _GLOBAL_NUM_RUNS
+    _GLOBAL_TIME_TRIALS = bool(time_trials)
+    _GLOBAL_NUM_RUNS = int(num_runs) if time_trials else 1
 
 
 # ==============================================================================
@@ -103,6 +103,7 @@ def generate_benchmark_azimuthal_grid(grid_name, N, **kwargs):
       - 'sine_perturbed': Sine-perturbed smooth grid (CG Mesh, default amplitude=0.20, mode=2)
       - 'multipole': Multipole harmonic grid (default poles=(2,4), amps=(0.04,0.02))
       - 'warped': Warped conformal grid (default eps1=0.08, eps2=-0.04)
+      - 'chebyshev': Chebyshev angular grid
     """
     name_lower = grid_name.lower().strip()
     if name_lower in ("uniform", "unif"):
@@ -136,15 +137,47 @@ def generate_benchmark_azimuthal_grid(grid_name, N, **kwargs):
 # ==============================================================================
 # Timing & Benchmark Execution Harness
 # ==============================================================================
-def timed_poisson_solve(f_vals, g_vals, u_fourier_0, N, M, r_m, theta_j, R,
-                        quad_rule, BC_choice, rad_unif, grid_type,
-                        use_nudft_angular=False, maxiter_nufft=50, tol_nufft=1e-8,
-                        reg_param=1e-12, eps_finufft=1e-12, num_processors=None,
-                        use_gpu=False, **kwargs):
+def timed_poisson_solve(
+    f_vals,
+    g_vals,
+    u_fourier_0,
+    N,
+    M,
+    r_m,
+    theta_j,
+    R,
+    quad_rule,
+    BC_choice,
+    rad_unif,
+    grid_type,
+    use_nudft_angular=False,
+    maxiter_nufft=100,
+    tol_nufft=1e-8,
+    reg_param=1e-10,
+    eps_finufft=1e-12,
+    precond_shift=1e-3,
+    kde_oversample=4,
+    kde_bandwidth=1.0,
+    num_processors=None,
+    use_gpu=False,
+    time_trials=None,
+    num_runs=None,
+    **kwargs,
+):
     """
-    Executes poisson_solver with multi-trial precision timing if TIME_TRIALS=True.
+    Executes poisson_solver with multi-trial precision timing if time_trials=True.
     Returns: (u_approx, elapsed_sec, min_sec, mean_sec)
     """
+    if time_trials is not None:
+        eff_time_trials = bool(time_trials)
+    else:
+        eff_time_trials = _GLOBAL_TIME_TRIALS
+
+    if num_runs is not None:
+        n_runs = int(num_runs)
+    else:
+        n_runs = _GLOBAL_NUM_RUNS if eff_time_trials else 1
+
     solve_kwargs = dict(
         f_values=f_vals,
         g_values=g_vals,
@@ -163,46 +196,66 @@ def timed_poisson_solve(f_vals, g_vals, u_fourier_0, N, M, r_m, theta_j, R,
         tol_nufft=tol_nufft,
         reg_param=reg_param,
         eps_finufft=eps_finufft,
+        precond_shift=precond_shift,
+        kde_oversample=kde_oversample,
+        kde_bandwidth=kde_bandwidth,
         num_processors=num_processors,
         use_gpu=use_gpu,
-        **kwargs
+        **kwargs,
     )
 
-    n_runs = NUM_RUNS if TIME_TRIALS else 1
-    runtimes = []
-    u_approx = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        runtimes = []
+        u_approx = None
 
-    for i in range(n_runs):
-        if use_gpu:
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
-        t0 = time.perf_counter()
-        res = poisson_solver(**solve_kwargs)
-        if use_gpu:
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
-        t1 = time.perf_counter()
-        runtimes.append(t1 - t0)
-        if u_approx is None:
-            u_approx = res
+        for _ in range(n_runs):
+            if use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
 
-    elapsed = float(np.min(runtimes)) if TIME_TRIALS else float(runtimes[0])
-    min_time = float(np.min(runtimes))
-    mean_time = float(np.mean(runtimes))
+            t0 = time.perf_counter()
+            res = poisson_solver(**solve_kwargs)
+
+            if use_gpu:
+                try:
+                    import cupy as cp
+                    cp.cuda.Stream.null.synchronize()
+                except Exception:
+                    pass
+
+            t1 = time.perf_counter()
+            runtimes.append(t1 - t0)
+            if u_approx is None:
+                u_approx = res
+
+        elapsed = float(min(runtimes))
+        min_time = float(min(runtimes))
+        mean_time = float(np.mean(runtimes))
+
     return u_approx, elapsed, min_time, mean_time
 
 
 # ==============================================================================
 # Suite 1: Uniform Grid Benchmark
 # ==============================================================================
-def run_uniform_benchmark(N_list, M_list, problem=None, R=1.0, quad_rule=1,
-                          BC_choice=1, perimeter_only=False, num_processors=None, use_gpu=False):
+def run_uniform_benchmark(
+    N_list,
+    M_list,
+    problem=None,
+    R=1.0,
+    quad_rule=1,
+    BC_choice=1,
+    perimeter_only=False,
+    num_processors=None,
+    use_gpu=False,
+    time_trials=None,
+    num_runs=None,
+    **kwargs,
+):
     """
     Benchmark Uniform FFT Poisson Solver across a 2D (N x M) grid matrix.
     """
@@ -224,7 +277,8 @@ def run_uniform_benchmark(N_list, M_list, problem=None, R=1.0, quad_rule=1,
                 continue
             tasks.append((N, M))
 
-    pbar = tqdm(total=len(tasks), desc="Uniform FFT")
+    backend_label = "GPU" if use_gpu else "CPU"
+    pbar = tqdm(total=len(tasks), desc=f"Uniform FFT [{backend_label}]")
 
     for N, M in tasks:
         theta_j = generate_uniform_azimuthal(N)
@@ -251,6 +305,9 @@ def run_uniform_benchmark(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             grid_type=1,
             num_processors=num_processors,
             use_gpu=use_gpu,
+            time_trials=time_trials,
+            num_runs=num_runs,
+            **kwargs,
         )
 
         linf, linf_rel, l2, l2_rel = compute_error_metrics(u_approx, u_exact, r_m, theta_j)
@@ -269,7 +326,7 @@ def run_uniform_benchmark(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "L_inf_Error": linf,
             "L2_Error": l2,
             "Rel_L2_Error": l2_rel,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": backend_label,
         })
         pbar.update(1)
 
@@ -280,13 +337,31 @@ def run_uniform_benchmark(N_list, M_list, problem=None, R=1.0, quad_rule=1,
 # ==============================================================================
 # Unified 5-Method Benchmark Runner
 # ==============================================================================
-def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
-                       BC_choice=1, maxiter_nufft=100, tol_nufft=1e-8,
-                       reg_param=1e-10, eps_finufft=1e-12,
-                       perimeter_only=False,
-                       toeplitz_grid="jittered", toeplitz_kwargs=None,
-                       cg_grid="sine_perturbed", cg_kwargs=None,
-                       num_processors=None, use_gpu=False):
+def run_all_benchmarks(
+    N_list,
+    M_list,
+    problem=None,
+    R=1.0,
+    quad_rule=1,
+    BC_choice=1,
+    maxiter_nufft=100,
+    tol_nufft=1e-8,
+    reg_param=1e-10,
+    eps_finufft=1e-12,
+    precond_shift=1e-3,
+    kde_oversample=4,
+    kde_bandwidth=1.0,
+    perimeter_only=False,
+    toeplitz_grid="jittered",
+    toeplitz_kwargs=None,
+    cg_grid="sine_perturbed",
+    cg_kwargs=None,
+    num_processors=None,
+    use_gpu=False,
+    time_trials=None,
+    num_runs=None,
+    **kwargs,
+):
     """
     Executes the unified 5-method benchmark across (N x M):
       1. Uniform FFT on Uniform Grid
@@ -317,9 +392,87 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
                 continue
             tasks.append((N, M))
 
+    backend_label = "GPU" if use_gpu else "CPU"
+
+    # -------------------------------------------------------------
+    # Warmup Solves across all 5 algorithms
+    # -------------------------------------------------------------
+    try:
+        w_N, w_M = tasks[0]
+        w_rm = generate_uniform_radial(w_M, R)
+        w_th_u = generate_uniform_azimuthal(w_N)
+        w_xu, w_yu = generate_cartesian_grid_on_disk(w_th_u, w_rm)
+        w_fu = f_func(w_xu, w_yu)
+        w_gu = g_func(w_xu[:, -1], w_yu[:, -1])
+
+        # 1. Warmup Uniform FFT
+        timed_poisson_solve(
+            f_vals=w_fu, g_vals=w_gu, u_fourier_0=np.array([]),
+            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_u, R=R,
+            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=1,
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=False, num_runs=1, **kwargs
+        )
+
+        w_th_t = generate_benchmark_azimuthal_grid(toeplitz_grid, w_N, **toeplitz_kwargs)
+        w_xt, w_yt = generate_cartesian_grid_on_disk(w_th_t, w_rm)
+        w_ft = f_func(w_xt, w_yt)
+        w_gt = g_func(w_xt[:, -1], w_yt[:, -1])
+
+        # 2. Warmup NUDFT Toeplitz
+        timed_poisson_solve(
+            f_vals=w_ft, g_vals=w_gt, u_fourier_0=0.0,
+            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_t, R=R,
+            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
+            use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=False, num_runs=1, **kwargs
+        )
+
+        # 3. Warmup NUFFT Toeplitz
+        timed_poisson_solve(
+            f_vals=w_ft, g_vals=w_gt, u_fourier_0=0.0,
+            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_t, R=R,
+            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
+            use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
+            reg_param=reg_param, eps_finufft=eps_finufft,
+            precond_shift=precond_shift, kde_oversample=kde_oversample, kde_bandwidth=kde_bandwidth,
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=False, num_runs=1, **kwargs
+        )
+
+        w_th_c = generate_benchmark_azimuthal_grid(cg_grid, w_N, **cg_kwargs)
+        w_xc, w_yc = generate_cartesian_grid_on_disk(w_th_c, w_rm)
+        w_fc = f_func(w_xc, w_yc)
+        w_gc = g_func(w_xc[:, -1], w_yc[:, -1])
+
+        # 4. Warmup NUDFT CG
+        timed_poisson_solve(
+            f_vals=w_fc, g_vals=w_gc, u_fourier_0=0.0,
+            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_c, R=R,
+            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
+            use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=False, num_runs=1, **kwargs
+        )
+
+        # 5. Warmup NUFFT CG
+        timed_poisson_solve(
+            f_vals=w_fc, g_vals=w_gc, u_fourier_0=0.0,
+            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_c, R=R,
+            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
+            use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
+            reg_param=reg_param, eps_finufft=eps_finufft,
+            precond_shift=precond_shift, kde_oversample=kde_oversample, kde_bandwidth=kde_bandwidth,
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=False, num_runs=1, **kwargs
+        )
+    except Exception:
+        pass
+
     records = []
     total_solves = len(tasks) * 5
-    pbar = tqdm(total=total_solves, desc=f"Benchmarking 5 Solvers [{'GPU' if use_gpu else 'CPU'}]")
+    pbar = tqdm(total=total_solves, desc=f"Benchmarking 5 Solvers [{backend_label}]")
 
     for N, M in tasks:
         r_m = generate_uniform_radial(M, R)
@@ -339,7 +492,8 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             f_vals=fu, g_vals=gu, u_fourier_0=u_fourier_0_dir,
             N=N, M=M, r_m=r_m, theta_j=th_unif, R=R,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=1,
-            num_processors=num_processors, use_gpu=use_gpu
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=time_trials, num_runs=num_runs, **kwargs
         )
         linf_ufft, _, l2_ufft, rel_l2_ufft = compute_error_metrics(u_ufft, uex_u, r_m, th_unif)
         records.append({
@@ -349,7 +503,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "Time_sec": t_ufft, "Time_ms": t_ufft * 1000.0,
             "Min_Time_sec": min_ufft, "Mean_Time_sec": mean_ufft,
             "L_inf_Error": linf_ufft, "L2_Error": l2_ufft, "Rel_L2_Error": rel_l2_ufft,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": backend_label,
         })
         pbar.update(1)
 
@@ -368,7 +522,8 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             N=N, M=M, r_m=r_m, theta_j=th_toep, R=R,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
             use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=time_trials, num_runs=num_runs, **kwargs
         )
         linf_nd_t, _, l2_nd_t, rel_l2_nd_t = compute_error_metrics(u_nd_t, uex_t, r_m, th_toep)
         records.append({
@@ -378,7 +533,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "Time_sec": t_nd_t, "Time_ms": t_nd_t * 1000.0,
             "Min_Time_sec": min_nd_t, "Mean_Time_sec": mean_nd_t,
             "L_inf_Error": linf_nd_t, "L2_Error": l2_nd_t, "Rel_L2_Error": rel_l2_nd_t,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": backend_label,
         })
         pbar.update(1)
 
@@ -389,7 +544,9 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
             use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
             reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu
+            precond_shift=precond_shift, kde_oversample=kde_oversample, kde_bandwidth=kde_bandwidth,
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=time_trials, num_runs=num_runs, **kwargs
         )
         linf_nf_t, _, l2_nf_t, rel_l2_nf_t = compute_error_metrics(u_nf_t, uex_t, r_m, th_toep)
         records.append({
@@ -399,7 +556,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "Time_sec": t_nf_t, "Time_ms": t_nf_t * 1000.0,
             "Min_Time_sec": min_nf_t, "Mean_Time_sec": mean_nf_t,
             "L_inf_Error": linf_nf_t, "L2_Error": l2_nf_t, "Rel_L2_Error": rel_l2_nf_t,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": backend_label,
         })
         pbar.update(1)
 
@@ -418,7 +575,8 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             N=N, M=M, r_m=r_m, theta_j=th_cg, R=R,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
             use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=time_trials, num_runs=num_runs, **kwargs
         )
         linf_nd_c, _, l2_nd_c, rel_l2_nd_c = compute_error_metrics(u_nd_c, uex_c, r_m, th_cg)
         records.append({
@@ -428,7 +586,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "Time_sec": t_nd_c, "Time_ms": t_nd_c * 1000.0,
             "Min_Time_sec": min_nd_c, "Mean_Time_sec": mean_nd_c,
             "L_inf_Error": linf_nd_c, "L2_Error": l2_nd_c, "Rel_L2_Error": rel_l2_nd_c,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": backend_label,
         })
         pbar.update(1)
 
@@ -439,7 +597,9 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
             use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
             reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu
+            precond_shift=precond_shift, kde_oversample=kde_oversample, kde_bandwidth=kde_bandwidth,
+            num_processors=num_processors, use_gpu=use_gpu,
+            time_trials=time_trials, num_runs=num_runs, **kwargs
         )
         linf_nf_c, _, l2_nf_c, rel_l2_nf_c = compute_error_metrics(u_nf_c, uex_c, r_m, th_cg)
         records.append({
@@ -449,12 +609,94 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
             "Time_sec": t_nf_c, "Time_ms": t_nf_c * 1000.0,
             "Min_Time_sec": min_nf_c, "Mean_Time_sec": mean_nf_c,
             "L_inf_Error": linf_nf_c, "L2_Error": l2_nf_c, "Rel_L2_Error": rel_l2_nf_c,
-            "Backend": "GPU" if use_gpu else "CPU",
+            "Backend": backend_label,
         })
         pbar.update(1)
 
     pbar.close()
     return pd.DataFrame(records)
+
+
+def run_cpu_and_gpu_benchmarks(
+    N_list,
+    M_list,
+    problem=None,
+    R=1.0,
+    quad_rule=1,
+    BC_choice=1,
+    maxiter_nufft=100,
+    tol_nufft=1e-8,
+    reg_param=1e-10,
+    eps_finufft=1e-12,
+    precond_shift=1e-3,
+    kde_oversample=4,
+    kde_bandwidth=1.0,
+    perimeter_only=False,
+    toeplitz_grid="jittered",
+    toeplitz_kwargs=None,
+    cg_grid="sine_perturbed",
+    cg_kwargs=None,
+    num_processors=None,
+    time_trials=None,
+    num_runs=None,
+    run_gpu_if_available=True,
+    **kwargs,
+):
+    """
+    Convenience runner executing the full 5-solver study on CPU and GPU (if available).
+    Returns: (df_cpu, df_gpu, df_combined)
+    """
+    common_args = dict(
+        N_list=N_list,
+        M_list=M_list,
+        problem=problem,
+        R=R,
+        quad_rule=quad_rule,
+        BC_choice=BC_choice,
+        maxiter_nufft=maxiter_nufft,
+        tol_nufft=tol_nufft,
+        reg_param=reg_param,
+        eps_finufft=eps_finufft,
+        precond_shift=precond_shift,
+        kde_oversample=kde_oversample,
+        kde_bandwidth=kde_bandwidth,
+        perimeter_only=perimeter_only,
+        toeplitz_grid=toeplitz_grid,
+        toeplitz_kwargs=toeplitz_kwargs,
+        cg_grid=cg_grid,
+        cg_kwargs=cg_kwargs,
+        time_trials=time_trials,
+        num_runs=num_runs,
+        **kwargs,
+    )
+
+    # 1. Run CPU Benchmark
+    df_cpu = run_all_benchmarks(
+        num_processors=num_processors,
+        use_gpu=False,
+        **common_args,
+    )
+
+    # 2. Run GPU Benchmark if requested & available
+    df_gpu = pd.DataFrame()
+    if run_gpu_if_available:
+        try:
+            import cupy as cp
+            _ = cp.cuda.Device()
+            df_gpu = run_all_benchmarks(
+                num_processors=None,
+                use_gpu=True,
+                **common_args,
+            )
+        except Exception as e:
+            print(f"[Notice] GPU benchmark skipped (CUDA/CuPy not available: {e})")
+
+    if not df_gpu.empty:
+        df_combined = pd.concat([df_cpu, df_gpu], ignore_index=True)
+    else:
+        df_combined = df_cpu.copy()
+
+    return df_cpu, df_gpu, df_combined
 
 
 # ==============================================================================
@@ -463,6 +705,7 @@ def run_all_benchmarks(N_list, M_list, problem=None, R=1.0, quad_rule=1,
 def display_benchmark_tables(df, N_values=None, M_values=None, title_prefix=""):
     """
     Display comprehensive N x M timing and accuracy tables across all 5 methods.
+    Supports single-backend or combined (CPU & GPU) DataFrames.
     """
     solver_order = [
         "Uniform FFT",
@@ -471,11 +714,6 @@ def display_benchmark_tables(df, N_values=None, M_values=None, title_prefix=""):
         "NUDFT (CG Mesh)",
         "NUFFT CG (PCGLS)",
     ]
-    solvers = [s for s in solver_order if s in df["Solver"].values]
-    if not solvers:
-        solvers = list(df["Solver"].unique())
-
-    backend_str = f" [{df['Backend'].iloc[0]}]" if "Backend" in df.columns else ""
 
     def fmt_time(x):
         return "—" if pd.isna(x) else f"{x:.4f} s"
@@ -483,27 +721,57 @@ def display_benchmark_tables(df, N_values=None, M_values=None, title_prefix=""):
     def fmt_err(x):
         return "—" if pd.isna(x) else f"{x:.2e}"
 
-    # 1. Timing Matrix Table
-    print(f"\n{'='*90}\n{title_prefix}TIMING MATRIX (s){backend_str}\n{'='*90}")
-    pivots_time = {}
-    for s in solvers:
-        p = df[df["Solver"] == s].pivot(index="N", columns="M", values="Time_sec")
-        if N_values is not None and M_values is not None:
-            p = p.reindex(index=N_values, columns=M_values)
-        pivots_time[s] = p
-    table_time = pd.concat(pivots_time, axis=1)
-    display(table_time.map(fmt_time))
+    def fmt_speedup(x):
+        return "—" if pd.isna(x) else f"{x:.2f}x"
 
-    # 2. Accuracy Matrix Table
-    print(f"\n{'='*90}\n{title_prefix}ACCURACY MATRIX (L_inf Error){backend_str}\n{'='*90}")
-    pivots_acc = {}
-    for s in solvers:
-        p = df[df["Solver"] == s].pivot(index="N", columns="M", values="L_inf_Error")
-        if N_values is not None and M_values is not None:
-            p = p.reindex(index=N_values, columns=M_values)
-        pivots_acc[s] = p
-    table_acc = pd.concat(pivots_acc, axis=1)
-    display(table_acc.map(fmt_err))
+    backends = df["Backend"].unique() if "Backend" in df.columns else [None]
+
+    for backend in backends:
+        sub_df = df[df["Backend"] == backend] if backend is not None else df
+        backend_str = f" [{backend}]" if backend is not None else ""
+
+        solvers = [s for s in solver_order if s in sub_df["Solver"].values]
+        if not solvers:
+            solvers = list(sub_df["Solver"].unique())
+
+        # 1. Timing Matrix Table
+        print(f"\n{'='*90}\n{title_prefix}TIMING MATRIX (s){backend_str}\n{'='*90}")
+        pivots_time = {}
+        for s in solvers:
+            p = sub_df[sub_df["Solver"] == s].pivot(index="N", columns="M", values="Time_sec")
+            if N_values is not None and M_values is not None:
+                p = p.reindex(index=N_values, columns=M_values)
+            pivots_time[s] = p
+        table_time = pd.concat(pivots_time, axis=1)
+        display(HTML(table_time.map(fmt_time).to_html(classes="table table-bordered text-center")))
+
+        # 2. Accuracy Matrix Table
+        print(f"\n{'='*90}\n{title_prefix}ACCURACY MATRIX (L_inf Error){backend_str}\n{'='*90}")
+        pivots_acc = {}
+        for s in solvers:
+            p = sub_df[sub_df["Solver"] == s].pivot(index="N", columns="M", values="L_inf_Error")
+            if N_values is not None and M_values is not None:
+                p = p.reindex(index=N_values, columns=M_values)
+            pivots_acc[s] = p
+        table_acc = pd.concat(pivots_acc, axis=1)
+        display(HTML(table_acc.map(fmt_err).to_html(classes="table table-bordered text-center")))
+
+    # 3. If both CPU and GPU are present, display Speedup Matrix (CPU Time / GPU Time)
+    if "CPU" in backends and "GPU" in backends:
+        df_c = df[df["Backend"] == "CPU"]
+        df_g = df[df["Backend"] == "GPU"]
+        solvers = [s for s in solver_order if s in df["Solver"].values]
+        print(f"\n{'='*90}\n{title_prefix}GPU SPEEDUP FACTOR (CPU Time / GPU Time)\n{'='*90}")
+        pivots_speedup = {}
+        for s in solvers:
+            p_c = df_c[df_c["Solver"] == s].pivot(index="N", columns="M", values="Time_sec")
+            p_g = df_g[df_g["Solver"] == s].pivot(index="N", columns="M", values="Time_sec")
+            if N_values is not None and M_values is not None:
+                p_c = p_c.reindex(index=N_values, columns=M_values)
+                p_g = p_g.reindex(index=N_values, columns=M_values)
+            pivots_speedup[s] = p_c / p_g
+        table_speedup = pd.concat(pivots_speedup, axis=1)
+        display(HTML(table_speedup.map(fmt_speedup).to_html(classes="table table-bordered text-center")))
 
 
 # ==============================================================================
@@ -535,7 +803,7 @@ def plot_grid_distributions(N=64, R=1.0):
     return fig
 
 
-def plot_runtime_2x2(df, N_values=None, M_values=None, use_gpu=None, title="Runtime Scaling Analysis"):
+def plot_runtime_2x2(df, N_values=None, M_values=None, backend=None, use_gpu=None, title="Runtime Scaling Analysis"):
     """
     Unified 2x2 Log-Log Runtime Figure (in Seconds) plotting all 5 solvers.
       (0, 0): Runtime vs N for min(M)
@@ -543,16 +811,33 @@ def plot_runtime_2x2(df, N_values=None, M_values=None, use_gpu=None, title="Runt
       (1, 0): Runtime vs M for min(N)
       (1, 1): Runtime vs M for max(N)
     """
+    if df.empty:
+        return None
+
+    # Filter by backend if specified
+    if backend is not None and "Backend" in df.columns:
+        df_plot = df[df["Backend"].str.upper() == backend.upper()]
+    elif use_gpu is not None and "Backend" in df.columns:
+        b_target = "GPU" if use_gpu else "CPU"
+        df_plot = df[df["Backend"] == b_target]
+    else:
+        df_plot = df
+
+    if df_plot.empty:
+        return None
+
     if N_values is None:
-        N_values = sorted(df["N"].unique())
+        N_values = sorted(df_plot["N"].unique())
     if M_values is None:
-        M_values = sorted(df["M"].unique())
+        M_values = sorted(df_plot["M"].unique())
 
-    if use_gpu is None:
-        use_gpu = ("Backend" in df.columns and (df["Backend"] == "GPU").any())
+    if "Backend" in df_plot.columns:
+        unique_backends = list(df_plot["Backend"].unique())
+        backend_tag = f" [{unique_backends[0]}]" if len(unique_backends) == 1 else ""
+    else:
+        backend_tag = " [GPU]" if use_gpu else " [CPU]" if use_gpu is not None else ""
 
-    backend_tag = "[GPU]" if use_gpu else "[CPU]"
-    fig_title = f"{title} {backend_tag}"
+    fig_title = f"{title}{backend_tag}"
 
     min_M, max_M = min(M_values), max(M_values)
     min_N, max_N = min(N_values), max(N_values)
@@ -568,10 +853,10 @@ def plot_runtime_2x2(df, N_values=None, M_values=None, use_gpu=None, title="Runt
     }
 
     configs = [
-        (axes[0, 0], "N", "Time_sec", df[df["M"] == min_M], f"(a) Runtime vs. N  (Fixed M = {min_M})", "Azimuthal Resolution N"),
-        (axes[0, 1], "N", "Time_sec", df[df["M"] == max_M], f"(b) Runtime vs. N  (Fixed M = {max_M})", "Azimuthal Resolution N"),
-        (axes[1, 0], "M", "Time_sec", df[df["N"] == min_N], f"(c) Runtime vs. M  (Fixed N = {min_N})", "Radial Resolution M"),
-        (axes[1, 1], "M", "Time_sec", df[df["N"] == max_N], f"(d) Runtime vs. M  (Fixed N = {max_N})", "Radial Resolution M"),
+        (axes[0, 0], "N", "Time_sec", df_plot[df_plot["M"] == min_M], f"(a) Runtime vs. N  (Fixed M = {min_M})", "Azimuthal Resolution N"),
+        (axes[0, 1], "N", "Time_sec", df_plot[df_plot["M"] == max_M], f"(b) Runtime vs. N  (Fixed M = {max_M})", "Azimuthal Resolution N"),
+        (axes[1, 0], "M", "Time_sec", df_plot[df_plot["N"] == min_N], f"(c) Runtime vs. M  (Fixed N = {min_N})", "Radial Resolution M"),
+        (axes[1, 1], "M", "Time_sec", df_plot[df_plot["N"] == max_N], f"(d) Runtime vs. M  (Fixed N = {max_N})", "Radial Resolution M"),
     ]
 
     for ax, x_col, y_col, sub_df, sub_title, x_label in configs:
@@ -596,7 +881,7 @@ def plot_runtime_2x2(df, N_values=None, M_values=None, use_gpu=None, title="Runt
     return fig
 
 
-def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", use_gpu=None, title="Accuracy Scaling Analysis"):
+def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", backend=None, use_gpu=None, title="Accuracy Scaling Analysis"):
     """
     Unified 2x2 Log-Log Accuracy Figure plotting all 5 solvers.
       (0, 0): L_inf Error vs N for min(M)
@@ -604,16 +889,33 @@ def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", us
       (1, 0): L_inf Error vs M for min(N)
       (1, 1): L_inf Error vs M for max(N)
     """
+    if df.empty:
+        return None
+
+    # Filter by backend if specified
+    if backend is not None and "Backend" in df.columns:
+        df_plot = df[df["Backend"].str.upper() == backend.upper()]
+    elif use_gpu is not None and "Backend" in df.columns:
+        b_target = "GPU" if use_gpu else "CPU"
+        df_plot = df[df["Backend"] == b_target]
+    else:
+        df_plot = df
+
+    if df_plot.empty:
+        return None
+
     if N_values is None:
-        N_values = sorted(df["N"].unique())
+        N_values = sorted(df_plot["N"].unique())
     if M_values is None:
-        M_values = sorted(df["M"].unique())
+        M_values = sorted(df_plot["M"].unique())
 
-    if use_gpu is None:
-        use_gpu = ("Backend" in df.columns and (df["Backend"] == "GPU").any())
+    if "Backend" in df_plot.columns:
+        unique_backends = list(df_plot["Backend"].unique())
+        backend_tag = f" [{unique_backends[0]}]" if len(unique_backends) == 1 else ""
+    else:
+        backend_tag = " [GPU]" if use_gpu else " [CPU]" if use_gpu is not None else ""
 
-    backend_tag = "[GPU]" if use_gpu else "[CPU]"
-    fig_title = f"{title} {backend_tag}"
+    fig_title = f"{title}{backend_tag}"
 
     min_M, max_M = min(M_values), max(M_values)
     min_N, max_N = min(N_values), max(N_values)
@@ -631,10 +933,10 @@ def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", us
     }
 
     configs = [
-        (axes[0, 0], "N", metric, df[df["M"] == min_M], f"(a) Error vs. N  (Fixed M = {min_M})", "Azimuthal Resolution N"),
-        (axes[0, 1], "N", metric, df[df["M"] == max_M], f"(b) Error vs. N  (Fixed M = {max_M})", "Azimuthal Resolution N"),
-        (axes[1, 0], "M", metric, df[df["N"] == min_N], f"(c) Error vs. M  (Fixed N = {min_N})", "Radial Resolution M"),
-        (axes[1, 1], "M", metric, df[df["N"] == max_N], f"(d) Error vs. M  (Fixed N = {max_N})", "Radial Resolution M"),
+        (axes[0, 0], "N", metric, df_plot[df_plot["M"] == min_M], f"(a) Error vs. N  (Fixed M = {min_M})", "Azimuthal Resolution N"),
+        (axes[0, 1], "N", metric, df_plot[df_plot["M"] == max_M], f"(b) Error vs. N  (Fixed M = {max_M})", "Azimuthal Resolution N"),
+        (axes[1, 0], "M", metric, df_plot[df_plot["N"] == min_N], f"(c) Error vs. M  (Fixed N = {min_N})", "Radial Resolution M"),
+        (axes[1, 1], "M", metric, df_plot[df_plot["N"] == max_N], f"(d) Error vs. M  (Fixed N = {max_N})", "Radial Resolution M"),
     ]
 
     for ax, x_col, y_col, sub_df, sub_title, x_label in configs:
