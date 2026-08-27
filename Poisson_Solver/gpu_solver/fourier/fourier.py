@@ -156,6 +156,15 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: cp.ndarray,
         )
 
 
+@cp.fuse()
+def _fuse_dirichlet_modes(v_mask, ratio, kabs, g_val, v_boundary):
+    return v_mask + (ratio ** kabs) * (g_val - v_boundary)
+
+@cp.fuse()
+def _fuse_neumann_modes(v_mask, ratio, kabs, R, g_val, v_boundary):
+    return v_mask + (ratio ** kabs) * ((R / kabs) * g_val + v_boundary)
+
+
 def compute_u_fourier_coefficients(v: cp.ndarray,
                                    g_fourier_coeff: cp.ndarray,
                                    u_fourier_0: complex,
@@ -195,12 +204,12 @@ def compute_u_fourier_coefficients(v: cp.ndarray,
     ratio = (r_m / R)[None, :]          # (1, M)
 
     if BC_choice == 1:
-        rp = ratio ** kabs
-        B = rp * (g_full[mask, None] - v[mask, M - 1][:, None])
-        u_fourier_coeff[mask, :] = v[mask, :] + B
+        u_fourier_coeff[mask, :] = _fuse_dirichlet_modes(
+            v[mask, :], ratio, kabs, g_full[mask, None], v[mask, M - 1][:, None]
+        )
     elif BC_choice == 2:
-        rp = ratio ** kabs
-        B = rp * ((R / kabs) * g_full[mask, None] + v[mask, M - 1][:, None])
-        u_fourier_coeff[mask, :] = v[mask, :] + B
+        u_fourier_coeff[mask, :] = _fuse_neumann_modes(
+            v[mask, :], ratio, kabs, R, g_full[mask, None], v[mask, M - 1][:, None]
+        )
 
     return u_fourier_coeff

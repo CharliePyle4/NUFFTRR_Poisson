@@ -187,6 +187,15 @@ def compute_v_neg_pos(C: cp.ndarray,
     return v_neg, v_pos
 
 
+@cp.fuse()
+def _fuse_combine_center_mode(log_r, v_neg_slice, v_pos_slice):
+    return log_r * v_neg_slice + v_pos_slice
+
+@cp.fuse()
+def _fuse_combine_modes(v_neg_part, v_pos_dual_part):
+    return v_neg_part + cp.conj(v_pos_dual_part)
+
+
 def combine_v_neg_pos_to_v(v_neg: cp.ndarray,
                            v_pos: cp.ndarray,
                            r_m: cp.ndarray,
@@ -216,7 +225,7 @@ def combine_v_neg_pos_to_v(v_neg: cp.ndarray,
     v[halfN, 0] = v_neg[halfN, 0] + v_pos[0, 0]
     if M > 1:
         log_r = cp.log(r_m[1:])
-        v[halfN, 1:] = log_r * v_neg[halfN, 1:] + v_pos[0, 1:]
+        v[halfN, 1:] = _fuse_combine_center_mode(log_r, v_neg[halfN, 1:], v_pos[0, 1:])
 
     # The combination formula is v_k = v_k^- + conj(v_{-k}^+)
     # For k < 0, we compute directly.
@@ -225,7 +234,7 @@ def combine_v_neg_pos_to_v(v_neg: cp.ndarray,
         # All negative modes k = -N/2, ..., -1 (indices 0..halfN-1)
         neg_indices = cp.arange(0, halfN)
         pos_dual_indices = halfN - neg_indices
-        v[neg_indices, :] = v_neg[neg_indices, :] + cp.conj(v_pos[pos_dual_indices, :])
+        v[neg_indices, :] = _fuse_combine_modes(v_neg[neg_indices, :], v_pos[pos_dual_indices, :])
 
         # All positive modes k = 1, ..., N/2 (indices halfN+1..N)
         pos_indices = cp.arange(halfN + 1, N + 1)
