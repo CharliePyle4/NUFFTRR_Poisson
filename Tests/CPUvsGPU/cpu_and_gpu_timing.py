@@ -209,6 +209,18 @@ def timed_poisson_solve(
         runtimes = []
         u_approx = None
 
+        # -------------------------------------------------------------
+        # Untimed Warmup Pass: primes FFTW plans, FINUFFT structures,
+        # and GPU device memory allocations prior to timing.
+        # -------------------------------------------------------------
+        poisson_solver(**solve_kwargs)
+        if use_gpu:
+            try:
+                import cupy as cp
+                cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
+
         for _ in range(n_runs):
             if use_gpu:
                 try:
