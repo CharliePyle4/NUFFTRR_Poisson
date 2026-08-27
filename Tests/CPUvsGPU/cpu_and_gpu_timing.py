@@ -496,7 +496,7 @@ def run_all_benchmarks(
 
     records = []
     total_solves = len(tasks) * 5
-    pbar = tqdm(total=total_solves, desc=f"Benchmarking 5 Solvers [{backend_label}]")
+    pbar = tqdm(total=total_solves, desc=f"Benchmarking 5 Solvers [{backend_label}]", file=sys.stdout, mininterval=0.1, leave=True)
 
     for N, M in tasks:
         r_m = generate_uniform_radial(M, R)
