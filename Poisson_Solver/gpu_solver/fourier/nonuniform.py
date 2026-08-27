@@ -55,7 +55,7 @@ def _compute_fft_kde_weights(theta_j: cp.ndarray,
 
     # 2. Wrapped Gaussian kernel centered at 0 (fused)
     sigma = float(bandwidth_factor) * (2.0 * cp.pi / N)
-    k_raw = cp.arange(M) * dx
+    k_raw = cp.arange(M, dtype=cp.float64) * dx
     kernel = _fuse_gaussian_kernel(k_raw, sigma)
 
     # 3. Circular convolution via cuFFT -> density at each grid center
