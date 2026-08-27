@@ -876,3 +876,97 @@ def plot_accuracy_2x2(df, N_values=None, M_values=None, metric="L_inf_Error", ba
     plt.suptitle(fig_title, fontsize=13, fontweight='bold', y=1.01)
     plt.tight_layout()
     return fig
+
+
+def plot_cpu_gpu_runtime_combined_4x2(
+    df,
+    N_values=None,
+    M_values=None,
+    title="Consolidated CPU vs. GPU Runtime Scaling (Shared Row Axes)",
+):
+    """
+    Combined 4-row x 2-column Log-Log Runtime Figure (in Seconds).
+      Column 0: CPU Execution Times
+      Column 1: GPU Execution Times
+      Row 0: Runtime vs N (Fixed M = min_M)
+      Row 1: Runtime vs N (Fixed M = max_M)
+      Row 2: Runtime vs M (Fixed N = min_N)
+      Row 3: Runtime vs M (Fixed N = max_N)
+
+    Y-axes are shared along rows (`sharey='row'`) for direct visual comparison of CPU vs. GPU.
+    """
+    if df.empty:
+        return None
+
+    if "Backend" not in df.columns:
+        print("[Warning] 'Backend' column not found in DataFrame for combined 4x2 plot.")
+        return None
+
+    df_cpu = df[df["Backend"].str.upper() == "CPU"]
+    df_gpu = df[df["Backend"].str.upper() == "GPU"]
+
+    if df_cpu.empty or df_gpu.empty:
+        print("[Warning] Both CPU and GPU data are required for the combined 4x2 comparison plot.")
+        return None
+
+    if N_values is None:
+        N_values = sorted(df["N"].unique())
+    if M_values is None:
+        M_values = sorted(df["M"].unique())
+
+    min_M, max_M = min(M_values), max(M_values)
+    min_N, max_N = min(N_values), max(N_values)
+
+    fig, axes = plt.subplots(4, 2, figsize=(14, 18), sharey="row")
+
+    solver_styles = {
+        "Uniform FFT": ("#1f77b4", "o", "-"),
+        "NUDFT": ("#2ca02c", "s", "--"),
+        "NUDFT (Toeplitz Mesh)": ("#2ca02c", "s", "--"),
+        "NUFFT Toeplitz": ("#17becf", "s", "-"),
+        "NUDFT (CG Mesh)": ("#9467bd", "^", "--"),
+        "NUFFT CG (PCGLS)": ("#ff7f0e", "^", "-"),
+    }
+
+    # Row definitions: (filter_col, filter_val, x_col, row_title_base, x_label)
+    row_configs = [
+        ("M", min_M, "N", f"Runtime vs. N  (Fixed M = {min_M})", "Azimuthal Resolution N"),
+        ("M", max_M, "N", f"Runtime vs. N  (Fixed M = {max_M})", "Azimuthal Resolution N"),
+        ("N", min_N, "M", f"Runtime vs. M  (Fixed N = {min_N})", "Radial Resolution M"),
+        ("N", max_N, "M", f"Runtime vs. M  (Fixed N = {max_N})", "Radial Resolution M"),
+    ]
+
+    for row_idx, (filter_col, filter_val, x_col, row_title_base, x_label) in enumerate(row_configs):
+        # Col 0: CPU, Col 1: GPU
+        for col_idx, (backend_name, backend_df) in enumerate([("CPU", df_cpu), ("GPU", df_gpu)]):
+            ax = axes[row_idx, col_idx]
+            sub_df = backend_df[backend_df[filter_col] == filter_val]
+
+            for solver_name, (color, marker, ls) in solver_styles.items():
+                grp = sub_df[sub_df["Solver"] == solver_name]
+                if grp.empty:
+                    continue
+                grp_sorted = grp.dropna(subset=["Time_sec"]).sort_values(x_col)
+                if grp_sorted.empty:
+                    continue
+                ax.loglog(
+                    grp_sorted[x_col],
+                    grp_sorted["Time_sec"],
+                    marker=marker,
+                    linestyle=ls,
+                    linewidth=2.0,
+                    markersize=7,
+                    label=solver_name,
+                    color=color,
+                )
+
+            ax.set_title(f"[{backend_name}] {row_title_base}", fontsize=11, fontweight="bold")
+            ax.set_xlabel(x_label, fontsize=10, fontweight="bold")
+            if col_idx == 0:
+                ax.set_ylabel("Execution Time (s)", fontsize=10, fontweight="bold")
+            ax.grid(True, which="both", linestyle="--", alpha=0.5)
+            ax.legend(fontsize=8.5, loc="upper left", frameon=True)
+
+    plt.suptitle(title, fontsize=14, fontweight="bold", y=0.995)
+    plt.tight_layout()
+    return fig
