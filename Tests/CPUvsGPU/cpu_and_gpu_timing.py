@@ -208,19 +208,7 @@ def timed_poisson_solve(
         warnings.simplefilter("ignore")
         runtimes = []
         u_approx = None
-
-        # -------------------------------------------------------------
-        # Untimed Warmup Pass: primes FFTW plans, FINUFFT structures,
-        # and GPU device memory allocations prior to timing.
-        # -------------------------------------------------------------
-        poisson_solver(**solve_kwargs)
-        if use_gpu:
-            try:
-                import cupy as cp
-                cp.cuda.Stream.null.synchronize()
-            except Exception:
-                pass
-
+        # Multi-run timing: with n_runs >= 2, min(runtimes) naturally selects the warm run
         for _ in range(n_runs):
             if use_gpu:
                 try:
@@ -300,7 +288,7 @@ def run_uniform_benchmark(
         f_vals = f_func(x_mesh, y_mesh)
         g_vals = g_func(x_mesh[:, -1], y_mesh[:, -1])
         u_exact = u_exact_func(x_mesh, y_mesh)
-        u_fourier_0 = np.array([])
+        u_fourier_0 = 0.0
 
         u_approx, elapsed, min_t, mean_t = timed_poisson_solve(
             f_vals=f_vals,
@@ -366,7 +354,7 @@ def run_all_benchmarks(
     perimeter_only=False,
     toeplitz_grid="jittered",
     toeplitz_kwargs=None,
-    cg_grid="sine_perturbed",
+    cg_grid="warped",
     cg_kwargs=None,
     num_processors=None,
     use_gpu=False,
@@ -379,7 +367,7 @@ def run_all_benchmarks(
       1. Uniform FFT on Uniform Grid
       2. NUDFT on Toeplitz Nonuniform Mesh (default Jittered, delta=0.25)
       3. NUFFT Toeplitz on Toeplitz Nonuniform Mesh
-      4. NUDFT on CG Nonuniform Mesh (default Sine-Perturbed, amplitude=0.20, mode=2)
+      4. NUDFT on CG Nonuniform Mesh (default Warped or Sine-Perturbed)
       5. NUFFT CG (PCGLS) on CG Nonuniform Mesh
     """
     if problem is None:
@@ -396,7 +384,7 @@ def run_all_benchmarks(
         if "warped" in cg_grid or "conformal" in cg_grid:
             cg_kwargs = {"eps1": 0.04, "eps2": -0.02}
         elif "sine" in cg_grid:
-            cg_kwargs = {"amplitude": 0.08, "mode": 2}
+            cg_kwargs = {"amplitude": 0.20, "mode": 2}
         elif "jitter" in cg_grid:
             cg_kwargs = {"jitter_fraction": 0.25}
         else:
@@ -418,89 +406,13 @@ def run_all_benchmarks(
 
     backend_label = "GPU" if use_gpu else "CPU"
 
-    # -------------------------------------------------------------
-    # Warmup Solves across all 5 algorithms
-    # -------------------------------------------------------------
-    try:
-        w_N, w_M = tasks[0]
-        w_rm = generate_uniform_radial(w_M, R)
-        w_th_u = generate_uniform_azimuthal(w_N)
-        w_xu, w_yu = generate_cartesian_grid_on_disk(w_th_u, w_rm)
-        w_fu = f_func(w_xu, w_yu)
-        w_gu = g_func(w_xu[:, -1], w_yu[:, -1])
-
-        # 1. Warmup Uniform FFT
-        timed_poisson_solve(
-            f_vals=w_fu, g_vals=w_gu, u_fourier_0=np.array([]),
-            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_u, R=R,
-            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=1,
-            num_processors=num_processors, use_gpu=use_gpu,
-            time_trials=False, num_runs=1, **kwargs
-        )
-
-        w_th_t = generate_benchmark_azimuthal_grid(toeplitz_grid, w_N, **toeplitz_kwargs)
-        w_xt, w_yt = generate_cartesian_grid_on_disk(w_th_t, w_rm)
-        w_ft = f_func(w_xt, w_yt)
-        w_gt = g_func(w_xt[:, -1], w_yt[:, -1])
-
-        # 2. Warmup NUDFT Toeplitz
-        timed_poisson_solve(
-            f_vals=w_ft, g_vals=w_gt, u_fourier_0=0.0,
-            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_t, R=R,
-            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
-            use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu,
-            time_trials=False, num_runs=1, **kwargs
-        )
-
-        # 3. Warmup NUFFT Toeplitz
-        timed_poisson_solve(
-            f_vals=w_ft, g_vals=w_gt, u_fourier_0=0.0,
-            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_t, R=R,
-            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=2,
-            use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
-            reg_param=reg_param, eps_finufft=eps_finufft,
-            precond_shift=precond_shift, kde_oversample=kde_oversample, kde_bandwidth=kde_bandwidth,
-            num_processors=num_processors, use_gpu=use_gpu,
-            time_trials=False, num_runs=1, **kwargs
-        )
-
-        w_th_c = generate_benchmark_azimuthal_grid(cg_grid, w_N, **cg_kwargs)
-        w_xc, w_yc = generate_cartesian_grid_on_disk(w_th_c, w_rm)
-        w_fc = f_func(w_xc, w_yc)
-        w_gc = g_func(w_xc[:, -1], w_yc[:, -1])
-
-        # 4. Warmup NUDFT CG
-        timed_poisson_solve(
-            f_vals=w_fc, g_vals=w_gc, u_fourier_0=0.0,
-            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_c, R=R,
-            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
-            use_nudft_angular=True, reg_param=reg_param, eps_finufft=eps_finufft,
-            num_processors=num_processors, use_gpu=use_gpu,
-            time_trials=False, num_runs=1, **kwargs
-        )
-
-        # 5. Warmup NUFFT CG
-        timed_poisson_solve(
-            f_vals=w_fc, g_vals=w_gc, u_fourier_0=0.0,
-            N=w_N, M=w_M, r_m=w_rm, theta_j=w_th_c, R=R,
-            quad_rule=quad_rule, BC_choice=BC_choice, rad_unif=1, grid_type=3,
-            use_nudft_angular=False, maxiter_nufft=maxiter_nufft, tol_nufft=tol_nufft,
-            reg_param=reg_param, eps_finufft=eps_finufft,
-            precond_shift=precond_shift, kde_oversample=kde_oversample, kde_bandwidth=kde_bandwidth,
-            num_processors=num_processors, use_gpu=use_gpu,
-            time_trials=False, num_runs=1, **kwargs
-        )
-    except Exception:
-        pass
-
     records = []
     total_solves = len(tasks) * 5
     pbar = tqdm(total=total_solves, desc=f"Benchmarking 5 Solvers [{backend_label}]", file=sys.stdout, mininterval=0.1, leave=True)
 
     for N, M in tasks:
         r_m = generate_uniform_radial(M, R)
-        u_fourier_0_dir = np.array([])
+        u_fourier_0_dir = 0.0
         u_fourier_0_nu = 0.0
 
         # -------------------------------------------------------------

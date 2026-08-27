@@ -165,10 +165,10 @@ def _compute_pipe_menon_weights(theta: np.ndarray,
     theta_ext = np.concatenate([[theta[-1] - 2.0*np.pi], theta, [theta[0] + 2.0*np.pi]])
     w = 0.5 * (theta_ext[2:] - theta_ext[:-2]) / (2.0 * np.pi)
 
-    # Fast 1D single-transform Guru plans for setup
-    p1 = finufft.Plan(1, (N,), n_trans=1, isign=-1, eps=eps, nthreads=n_threads)
+    # Fast 1D single-transform Guru plans for setup (1 thread is 15x faster for single vector)
+    p1 = finufft.Plan(1, (N,), n_trans=1, isign=-1, eps=eps, nthreads=1)
     p1.setpts(x)
-    p2 = finufft.Plan(2, (N,), n_trans=1, isign=+1, eps=eps, nthreads=n_threads)
+    p2 = finufft.Plan(2, (N,), n_trans=1, isign=+1, eps=eps, nthreads=1)
     p2.setpts(x)
 
     c = np.empty((1, N), dtype=np.complex128)
@@ -360,14 +360,14 @@ def _invert_nufft_block_cgls_shared(theta_j,
     v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps, num_processors=n_threads)  # (2N,)
     v_shift = fftw_fft.ifftshift(v_raw)
     V_hat = fftw_fft.fft(v_shift, threads=n_threads)[None, :]  # (1, 2N)
-    # Pre-allocate aligned arrays and build FFTW plans for T_op
+    # Pre-allocate aligned arrays and build FFTW plans for T_op using FFTW_ESTIMATE (eliminates hundreds of ms of plan benchmarking)
     T_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
     T_hat = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
-    fft_T = pyfftw.FFTW(T_in, T_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads)
+    fft_T = pyfftw.FFTW(T_in, T_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads, flags=('FFTW_ESTIMATE',))
 
     T_ifft_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
     T_out = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
-    ifft_T = pyfftw.FFTW(T_ifft_in, T_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads)
+    ifft_T = pyfftw.FFTW(T_ifft_in, T_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads, flags=('FFTW_ESTIMATE',))
 
     # 3. Fast Toeplitz Matrix-Vector Multiplication via FFT
     def T_op(X):
@@ -387,11 +387,11 @@ def _invert_nufft_block_cgls_shared(theta_j,
 
     M_in = pyfftw.empty_aligned((K, N), dtype='complex128')
     M_hat = pyfftw.empty_aligned((K, N), dtype='complex128')
-    fft_M = pyfftw.FFTW(M_in, M_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads)
+    fft_M = pyfftw.FFTW(M_in, M_hat, axes=(1,), direction='FFTW_FORWARD', threads=n_threads, flags=('FFTW_ESTIMATE',))
 
     M_ifft_in = pyfftw.empty_aligned((K, N), dtype='complex128')
     M_out = pyfftw.empty_aligned((K, N), dtype='complex128')
-    ifft_M = pyfftw.FFTW(M_ifft_in, M_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads)
+    ifft_M = pyfftw.FFTW(M_ifft_in, M_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads, flags=('FFTW_ESTIMATE',))
 
     def M_inv(V):
         M_in[:] = fftw_fft.ifftshift(V, axes=1)
