@@ -413,9 +413,9 @@ def run_all_algorithms_NxM_study(
     **kwargs,
 ):
     algorithms = [
-        ("Adapted NUFFT", 1, False),
-        ("Adapted NUDFT", 1, True),
-        ("Uniform FFT + periodic cubic spline", 2, False),
+        ("NUFFT (PCGLS)", 1, False),
+        ("NUDFT", 1, True),
+        ("Uniform FFT + cubic spline", 2, False),
     ]
     actual_use_gpu = _GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
     # Comprehensive Warmup Solve across ALL algorithms (Warms up cuSOLVER, cuFFT, cuFINUFFT plans, and CPU caches)
@@ -892,17 +892,17 @@ def plot_adapted_vs_highres_uniform(
     # --------------------------------------------------------------
     plot_cases = [
         (
-            "Adapted NUFFT\n"
+            "NUFFT (PCGLS)\n"
             "direct distorted data",
             res_nufft,
         ),
         (
-            "Uniform FFT + interpolation\n"
+            "Uniform FFT + cubic spline\n"
             "same measurement budget",
             res_uniform_equal,
         ),
         (
-            "Uniform FFT + interpolation\n"
+            "Uniform FFT + cubic spline\n"
             "higher measurement budget",
             res_uniform_high,
         ),
@@ -913,19 +913,19 @@ def plot_adapted_vs_highres_uniform(
     # --------------------------------------------------------------
     table_cases = [
         (
-            "Adapted NUFFT — direct distorted data",
+            "NUFFT (PCGLS) — direct distorted data",
             res_nufft,
         ),
         (
-            "Adapted NUDFT — direct distorted data",
+            "NUDFT — direct distorted data",
             res_nudft,
         ),
         (
-            "Uniform FFT + interpolation — same measurement budget",
+            "Uniform FFT + cubic spline — same measurement budget",
             res_uniform_equal,
         ),
         (
-            "Uniform FFT + interpolation — higher measurement budget",
+            "Uniform FFT + cubic spline — higher measurement budget",
             res_uniform_high,
         ),
     ]
@@ -1083,72 +1083,265 @@ def plot_adapted_vs_highres_uniform(
 
     return summary_df
       
+def _normalize_method_names(df):
+    """Normalize method labels so graphs and tables never display 'Adapted' and use PCGLS."""
+    df = df.copy()
+    mapping = {
+        "Adapted NUFFT": "NUFFT (PCGLS)",
+        "Adapted / NUFFT": "NUFFT (PCGLS)",
+        "NUFFT (Toeplitz)": "NUFFT (PCGLS)",
+        "NUFFT (Unsquared)": "NUFFT (PCGLS)",
+        "NUFFT": "NUFFT (PCGLS)",
+        "Adapted NUDFT": "NUDFT",
+        "Adapted / NUDFT": "NUDFT",
+        "Uniform FFT + periodic cubic spline": "Uniform FFT + cubic spline",
+        "Uniform / FFT + cubic spline": "Uniform FFT + cubic spline",
+    }
+    col = "label" if "label" in df.columns else ("method" if "method" in df.columns else None)
+    if col is not None:
+        df[col] = df[col].replace(mapping)
+        if hasattr(df[col], "str"):
+            df[col] = df[col].str.replace("(Unsquared)", "(PCGLS)", regex=False).str.replace("Unsquared", "PCGLS", regex=False)
+    return df
+
+
 def render_combined_runtime_table(df_results):
-    pivot = df_results.pivot_table(index="N", columns=["method", "M"], values="runtime").sort_index(axis=1)
+    df_results = _normalize_method_names(df_results)
+    order = ["NUFFT (PCGLS)", "NUDFT", "Uniform FFT + cubic spline"]
+    pivot = df_results.pivot_table(index="N", columns=["method", "M"], values="runtime")
+    columns = [(name, M) for name in order for M in sorted(df_results["M"].unique()) if (name, M) in pivot.columns]
+    if columns:
+        pivot = pivot.reindex(columns=columns)
     display(HTML(pivot.map(lambda v: f"{v:.4f}" if np.isfinite(v) else "—").to_html(classes="table table-bordered text-center")))
     return pivot
 
 
 def render_combined_error_table(df_results, value_col="L2_rel"):
-    order = ["Adapted NUFFT", "Adapted NUDFT", "Uniform FFT + periodic cubic spline"]
+    df_results = _normalize_method_names(df_results)
+    order = ["NUFFT (PCGLS)", "NUDFT", "Uniform FFT + cubic spline"]
     pivot = df_results.pivot_table(index="N", columns=["method", "M"], values=value_col, aggfunc="first")
     columns = [(name, M) for name in order for M in sorted(df_results["M"].unique()) if (name, M) in pivot.columns]
-    pivot = pivot.reindex(columns=columns).sort_index()
+    if columns:
+        pivot = pivot.reindex(columns=columns).sort_index()
     display(HTML(pivot.map(lambda v: f"{v:.2e}" if np.isfinite(v) else "—").to_html(classes="table table-bordered text-center")))
     return pivot
 
 
-def plot_accuracy_from_df(df_results, fixed_M=64, fixed_N=64):
-    colors = {"Adapted NUFFT":"crimson", "Adapted NUDFT":"forestgreen", "Uniform FFT + periodic cubic spline":"royalblue"}
-    markers = {"Adapted NUFFT":"s--", "Adapted NUDFT":"^-.", "Uniform FFT + periodic cubic spline":"o-"}
-    fig, axes = plt.subplots(1, 2, figsize=(8, 3.2), sharey=True)
-    for method, g in df_results[df_results.M == fixed_M].groupby("method"):
-        g = g.sort_values("N"); axes[0].loglog(g.N, g.L2_rel, markers[method], color=colors[method], label=method)
-    for method, g in df_results[df_results.N == fixed_N].groupby("method"):
-        g = g.sort_values("M"); axes[1].loglog(g.M, g.L2_rel, markers[method], color=colors[method], label=method)
-    axes[0].set(title=f"Error vs N (M={fixed_M})", xlabel="Angular points N", ylabel=r"Relative $L_2$ error")
-    axes[1].set(title=f"Error vs M (N={fixed_N})", xlabel="Radial points M")
-    for ax in axes: ax.grid(True, which="both", ls="--", alpha=.45); ax.legend(fontsize=7)
-    fig.suptitle("Single Multipole on Structured Distorted Angular Grid — Accuracy", y=1.02)
-    plt.tight_layout(); plt.show()
+def plot_accuracy_from_df(df_results, fixed_M=64, fixed_N=64, title_prefix=None):
+    df_results = _normalize_method_names(df_results)
+    colors = {
+        "NUFFT (PCGLS)": "crimson",
+        "NUDFT": "forestgreen",
+        "Uniform FFT + cubic spline": "royalblue",
+    }
+    markers = {
+        "NUFFT (PCGLS)": "s--",
+        "NUDFT": "^-.",
+        "Uniform FFT + cubic spline": "o-",
+    }
+    labels = {
+        "NUFFT (PCGLS)": "NUFFT (PCGLS)",
+        "NUDFT": "NUDFT",
+        "Uniform FFT + cubic spline": "Uniform FFT + cubic spline",
+    }
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4.2), sharey=True)
+    title = title_prefix if title_prefix is not None else "Algorithm Accuracy, Structured Nonuniform Mesh"
+    fig.suptitle(title, fontsize=12, fontweight="bold", y=0.98)
+
+    col = "label" if "label" in df_results.columns else "method"
+    for m, g in df_results[df_results.M == fixed_M].groupby(col):
+        g = g.sort_values("N")
+        lbl = labels.get(m, m)
+        axes[0].loglog(g.N, g.L2_rel, markers.get(lbl, "o-"),
+                       color=colors.get(lbl, "black"), label=lbl)
+    for m, g in df_results[df_results.N == fixed_N].groupby(col):
+        g = g.sort_values("M")
+        lbl = labels.get(m, m)
+        axes[1].loglog(g.M, g.L2_rel, markers.get(lbl, "o-"),
+                       color=colors.get(lbl, "black"), label=lbl)
+    axes[0].set_title(f"Error vs N (M = {fixed_M})")
+    axes[0].set_xlabel("Angular Grid Points (N)")
+    axes[0].set_ylabel(r"Relative $L_2$ Error")
+    axes[1].set_title(f"Error vs M (N = {fixed_N})")
+    axes[1].set_xlabel("Radial Grid Points (M)")
+    for ax in axes:
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        ax.legend(fontsize=8)
+    plt.tight_layout(rect=[0, 0.02, 1, 0.95])
+    plt.show()
 
 
-def plot_accuracy_faceted_by_method(df_results, N_values=None, M_values=None):
-    methods = [m for m in ["Adapted NUFFT", "Adapted NUDFT", "Uniform FFT + periodic cubic spline"] if m in set(df_results.method)]
+def plot_accuracy_faceted_by_method(df_results, N_values=None, M_values=None, title_prefix=None):
+    df_results = _normalize_method_names(df_results)
+    method_order = ["NUFFT (PCGLS)", "NUDFT", "Uniform FFT + cubic spline"]
+    col = "label" if "label" in df_results.columns else "method"
+    methods = [m for m in method_order if m in set(df_results[col])]
+    if not methods:
+        methods = sorted(df_results[col].unique())
     N_values = sorted(df_results.N.unique()) if N_values is None else N_values
     M_values = sorted(df_results.M.unique()) if M_values is None else M_values
-    fig, axes = plt.subplots(2, len(methods), figsize=(3.5*len(methods), 5), sharey="row", squeeze=False)
+    fig, axes = plt.subplots(2, len(methods), figsize=(4.5 * len(methods), 5.5), sharey="row", squeeze=False)
     cmap = plt.get_cmap("tab10")
-    for col, method in enumerate(methods):
-        sub = df_results[df_results.method == method]
+
+    title = title_prefix if title_prefix is not None else "Algorithm Accuracy by Method, Structured Nonuniform Mesh"
+    fig.suptitle(title, fontsize=12, fontweight="bold", y=0.98)
+
+    for col_idx, method in enumerate(methods):
+        sub = df_results[df_results[col] == method]
         for i, N in enumerate(N_values):
             g = sub[sub.N == N].sort_values("M")
-            axes[0,col].loglog(g.M, g.L2_rel, "o-", ms=3, color=cmap(i), label=f"N={N}")
+            axes[0, col_idx].loglog(g.M, g.L2_rel, "o-", ms=3, color=cmap(i), label=f"N={N}")
         for i, M in enumerate(M_values):
             g = sub[sub.M == M].sort_values("N")
-            axes[1,col].loglog(g.N, g.L2_rel, "s-", ms=3, color=cmap(i), label=f"M={M}")
-        axes[0,col].set(title=f"{method}\nError vs M", xlabel="Radial points M")
-        axes[1,col].set(title=f"{method}\nError vs N", xlabel="Angular points N")
-        for ax in (axes[0,col], axes[1,col]): ax.grid(True, which="both", ls="--", alpha=.45); ax.legend(fontsize=6)
-    axes[0,0].set_ylabel(r"Relative $L_2$ error"); axes[1,0].set_ylabel(r"Relative $L_2$ error")
-    fig.suptitle("Single Multipole on Structured Distorted Angular Grid — Accuracy by Method", y=.99)
-    plt.tight_layout(rect=(0, 0, 1, .95)); plt.show()
+            axes[1, col_idx].loglog(g.N, g.L2_rel, "s-", ms=3, color=cmap(i), label=f"M={M}")
+        axes[0, col_idx].set_title(f"{method} — Error vs M")
+        axes[0, col_idx].set_xlabel("Radial Grid Points (M)")
+        axes[1, col_idx].set_title(f"{method} — Error vs N")
+        axes[1, col_idx].set_xlabel("Angular Grid Points (N)")
+        for ax in (axes[0, col_idx], axes[1, col_idx]):
+            ax.grid(True, which="both", ls="--", alpha=0.5)
+            ax.legend(fontsize=7)
+    axes[0, 0].set_ylabel(r"Relative $L_2$ Error")
+    axes[1, 0].set_ylabel(r"Relative $L_2$ Error")
+    plt.tight_layout(rect=(0, 0.02, 1, 0.95))
+    plt.show()
 
 
-def plot_extreme_runtime_2x2(df_results, N_min=None, N_max=None, M_min=None, M_max=None):
-    N_min = df_results.N.min() if N_min is None else N_min; N_max = df_results.N.max() if N_max is None else N_max
-    M_min = df_results.M.min() if M_min is None else M_min; M_max = df_results.M.max() if M_max is None else M_max
-    colors = {"Adapted NUFFT":"crimson", "Adapted NUDFT":"forestgreen", "Uniform FFT + periodic cubic spline":"royalblue"}
-    specs = [(df_results[df_results.N == N_min], "M", f"N={N_min}: Runtime vs M"),
-             (df_results[df_results.N == N_max], "M", f"N={N_max}: Runtime vs M"),
-             (df_results[df_results.M == M_min], "N", f"M={M_min}: Runtime vs N"),
-             (df_results[df_results.M == M_max], "N", f"M={M_max}: Runtime vs N")]
-    fig, axes = plt.subplots(2, 2, figsize=(8, 6)); axes = axes.ravel()
-    for ax, (sub, x, title) in zip(axes, specs):
-        for method, g in sub.groupby("method"):
-            g = g.sort_values(x); ax.loglog(g[x], g.runtime, "o-", color=colors.get(method, "black"), label=method)
-        ax.set(title=title, xlabel=f"{x} grid points", ylabel="Runtime (seconds)"); ax.grid(True, which="both", ls="--", alpha=.45)
-    handles, labels = axes[0].get_legend_handles_labels(); fig.legend(handles, labels, loc="upper center", ncol=3, fontsize=8, frameon=False)
-    fig.suptitle("Single Multipole on Structured Distorted Angular Grid — Runtime", y=.99)
-    plt.tight_layout(rect=(0, 0, 1, .92)); plt.show()
+def plot_extreme_runtime_2x2(
+    df_results,
+    N_min=None,
+    N_max=None,
+    M_min=None,
+    M_max=None,
+    title_prefix=None,
+    use_gpu=None,
+):
+    """
+    2x2 runtime plot using only the lowest and highest N and M:
+      Top-left:  runtime vs M for N = N_min
+      Top-right: runtime vs M for N = N_max
+      Bottom-left:  runtime vs N for M = M_min
+      Bottom-right: runtime vs N for M = M_max
+    All solver labels are plotted with a single shared legend placed below the 2x2 plots.
+    """
+    df_results = _normalize_method_names(df_results)
+    col = "label" if "label" in df_results.columns else "method"
+
+    N_vals = sorted(df_results["N"].unique())
+    M_vals = sorted(df_results["M"].unique())
+    if len(N_vals) < 2 or len(M_vals) < 2:
+        print("Need at least two distinct N and M values for extremes plot.")
+        return
+
+    N_min = N_vals[0] if N_min is None else N_min
+    N_max = N_vals[-1] if N_max is None else N_max
+    M_min = M_vals[0] if M_min is None else M_min
+    M_max = M_vals[-1] if M_max is None else M_max
+
+    actual_use_gpu = _GLOBAL_USE_GPU if use_gpu is None else bool(use_gpu)
+    backend_str = "GPU" if actual_use_gpu else "CPU"
+
+    if title_prefix is None or title_prefix in ("Runtime Scaling on a Structured Angular Grid", "Table 1 (extreme N,M)", "Single Multipole on Structured Distorted Angular Grid — Runtime"):
+        title = f"Algorithm Runtimes ({backend_str}), Structured Nonuniform Mesh"
+    else:
+        title = title_prefix
+
+    colors = {
+        "NUFFT (PCGLS)": "#C6284A",
+        "NUDFT": "#2E7D32",
+        "Uniform FFT + cubic spline": "#3268B8",
+    }
+
+    labels = {
+        "NUFFT (PCGLS)": "NUFFT (PCGLS)",
+        "NUDFT": "NUDFT",
+        "Uniform FFT + cubic spline": "Uniform FFT + cubic spline",
+    }
+
+    markers = {
+        "NUFFT (PCGLS)": "o",
+        "NUDFT": "^",
+        "Uniform FFT + cubic spline": "s",
+    }
+
+    method_order = ["NUDFT", "NUFFT (PCGLS)", "Uniform FFT + cubic spline"]
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharey="row")
+    fig.suptitle(title, fontsize=12, fontweight="bold", y=0.98)
+
+    # Top-left: runtime vs M for N = N_min
+    ax = axes[0, 0]
+    df_sub = df_results[df_results["N"] == N_min]
+    methods_present = [m for m in method_order if m in set(df_sub[col])] or list(df_sub[col].unique())
+    for m in methods_present:
+        group = df_sub[df_sub[col] == m].sort_values("M")
+        lbl = labels.get(m, m)
+        ax.loglog(group["M"], group["runtime"], color=colors.get(lbl, "black"),
+                  marker=markers.get(lbl, "o"), label=lbl)
+    ax.set_xlabel("Radial Grid Points (M)")
+    ax.set_ylabel("Runtime (seconds)")
+    ax.set_title(f"N = {N_min} — Runtime vs M")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    # Top-right: runtime vs M for N = N_max
+    ax = axes[0, 1]
+    df_sub = df_results[df_results["N"] == N_max]
+    methods_present = [m for m in method_order if m in set(df_sub[col])] or list(df_sub[col].unique())
+    for m in methods_present:
+        group = df_sub[df_sub[col] == m].sort_values("M")
+        lbl = labels.get(m, m)
+        ax.loglog(group["M"], group["runtime"], color=colors.get(lbl, "black"),
+                  marker=markers.get(lbl, "o"), label=lbl)
+    ax.set_xlabel("Radial Grid Points (M)")
+    ax.set_title(f"N = {N_max} — Runtime vs M")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    # Bottom-left: runtime vs N for M = M_min
+    ax = axes[1, 0]
+    df_sub = df_results[df_results["M"] == M_min]
+    methods_present = [m for m in method_order if m in set(df_sub[col])] or list(df_sub[col].unique())
+    for m in methods_present:
+        group = df_sub[df_sub[col] == m].sort_values("N")
+        lbl = labels.get(m, m)
+        ax.loglog(group["N"], group["runtime"], color=colors.get(lbl, "black"),
+                  marker=markers.get(lbl, "s"), label=lbl)
+    ax.set_xlabel("Angular Grid Points (N)")
+    ax.set_ylabel("Runtime (seconds)")
+    ax.set_title(f"M = {M_min} — Runtime vs N")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    # Bottom-right: runtime vs N for M = M_max
+    ax = axes[1, 1]
+    df_sub = df_results[df_results["M"] == M_max]
+    methods_present = [m for m in method_order if m in set(df_sub[col])] or list(df_sub[col].unique())
+    for m in methods_present:
+        group = df_sub[df_sub[col] == m].sort_values("N")
+        lbl = labels.get(m, m)
+        ax.loglog(group["N"], group["runtime"], color=colors.get(lbl, "black"),
+                  marker=markers.get(lbl, "s"), label=lbl)
+    ax.set_xlabel("Angular Grid Points (N)")
+    ax.set_title(f"M = {M_max} — Runtime vs N")
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+
+    # Single shared legend below the 2x2 plots
+    handles, legend_labels = axes[0, 0].get_legend_handles_labels()
+    if not handles:
+        handles, legend_labels = axes[1, 0].get_legend_handles_labels()
+
+    fig.legend(
+        handles,
+        legend_labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        ncol=len(legend_labels) if legend_labels else 1,
+        fontsize=9,
+        frameon=True,
+    )
+
+    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+    plt.show()
+
+
+# Alias for consistent naming
+plot_runtime_table1_extremes = plot_extreme_runtime_2x2
 
