@@ -115,7 +115,7 @@ def synthesize_spatial_from_fourier(u_fourier_coeff: np.ndarray,
     if grid_type == 1:
         coeff    = np.vstack([u_fourier_coeff[halfN:N, :],
                               u_fourier_coeff[0:halfN, :]])
-        u_approx = fftw_fft.ifft(coeff, axis=0, threads=n_threads) * N
+        u_approx = fftw_fft.ifft(coeff, axis=0, threads=n_threads, planner_effort='FFTW_ESTIMATE') * N
         return u_approx
 
     elif grid_type in (2, 3):

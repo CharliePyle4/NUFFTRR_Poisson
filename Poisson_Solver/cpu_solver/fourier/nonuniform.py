@@ -72,9 +72,9 @@ def _compute_fft_kde_weights(theta_j: np.ndarray,
     # 3. Circular convolution via FFT -> density at each grid center
     n_threads = _resolve_num_processors(num_processors)
     density_grid = fftw_fft.irfft(
-        fftw_fft.rfft(hist.astype(float), threads=n_threads)
-        * fftw_fft.rfft(kernel, threads=n_threads),
-        n=M, threads=n_threads
+        fftw_fft.rfft(hist.astype(float), threads=n_threads, planner_effort='FFTW_ESTIMATE')
+        * fftw_fft.rfft(kernel, threads=n_threads, planner_effort='FFTW_ESTIMATE'),
+        n=M, threads=n_threads, planner_effort='FFTW_ESTIMATE'
     )
 
     # 4. Interpolate density to original angle positions (periodic)
@@ -359,7 +359,7 @@ def _invert_nufft_block_cgls_shared(theta_j,
     # 2. Compute Toeplitz kernel from weights (1 FINUFFT Adjoint, double resolution)
     v_raw = _nufft_adjoint(x_wrapped, w.flatten(), N_modes=2*N, eps=eps, num_processors=n_threads)  # (2N,)
     v_shift = fftw_fft.ifftshift(v_raw)
-    V_hat = fftw_fft.fft(v_shift, threads=n_threads)[None, :]  # (1, 2N)
+    V_hat = fftw_fft.fft(v_shift, threads=n_threads, planner_effort='FFTW_ESTIMATE')[None, :]  # (1, 2N)
     # Pre-allocate aligned arrays and build FFTW plans for T_op using FFTW_ESTIMATE (eliminates hundreds of ms of plan benchmarking)
     T_in = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
     T_hat = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
@@ -382,7 +382,7 @@ def _invert_nufft_block_cgls_shared(theta_j,
     k = np.arange(N)
     c_chan = ((N - k) / N) * v_raw[N : 2*N] + (k / N) * v_raw[0 : N]
     
-    eig_c = np.abs(fftw_fft.fft(c_chan, threads=n_threads)) + precond_shift
+    eig_c = np.abs(fftw_fft.fft(c_chan, threads=n_threads, planner_effort='FFTW_ESTIMATE')) + precond_shift
     eig_c_inv = (1.0 / eig_c)[None, :]
 
     M_in = pyfftw.empty_aligned((K, N), dtype='complex128')

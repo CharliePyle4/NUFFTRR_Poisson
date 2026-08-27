@@ -16,12 +16,12 @@ def compute_fourier_coeff_unif(f_values: np.ndarray, num_processors: int = None)
     n_threads = _resolve_num_processors(num_processors)
 
     if _is_matrix(f_values):
-        fft_vals = fftw_fft.fft(f_values, axis=0, threads=n_threads) / N
+        fft_vals = fftw_fft.fft(f_values, axis=0, threads=n_threads, planner_effort='FFTW_ESTIMATE') / N
         coeff    = np.vstack([fft_vals[half:N, :], fft_vals[0:half + 1, :]])
         coeff[0, :] /= 2.0
         coeff[N, :] /= 2.0
     else:
-        fft_vals = fftw_fft.fft(f_values, threads=n_threads) / N
+        fft_vals = fftw_fft.fft(f_values, threads=n_threads, planner_effort='FFTW_ESTIMATE') / N
         coeff    = np.hstack([fft_vals[half:N], fft_vals[0:half + 1]])
         coeff[0] /= 2.0
         coeff[N] /= 2.0
