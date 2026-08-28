@@ -232,16 +232,16 @@ def _invert_nufft_cgls_unsquared(theta_j,
     p_T = s_T.copy()
     q_T = np.empty((K, N), dtype=np.complex128)
 
-    gamma = np.sum(np.abs(s_T)**2, axis=1)  # (K,)
+    gamma = np.sum(s_T.real**2 + s_T.imag**2, axis=1)  # (K,)
     norm_s0 = np.sqrt(gamma) + 1e-14
 
     for it in range(maxiter):
         # 1. Forward step: q = A p (Type-2 NUFFT)
         plan2.execute(p_T, q_T)
 
-        # 2. Optimal step size
-        norm_q_sq = np.sum(np.abs(q_T)**2 * w, axis=1) + 1e-28  # (K,)
-        alpha = (gamma / norm_q_sq)[:, None]                    # (K, 1)
+        # 2. Optimal step size (without hypot/sqrt overhead)
+        norm_q_sq = np.sum((q_T.real**2 + q_T.imag**2) * w, axis=1) + 1e-28  # (K,)
+        alpha = (gamma / norm_q_sq)[:, None]                                 # (K, 1)
 
         # 3. Update Fourier coefficients & spatial residual
         c_T += alpha * p_T
@@ -250,7 +250,7 @@ def _invert_nufft_cgls_unsquared(theta_j,
 
         # 4. Adjoint step: s = A^H (W r) (Type-1 NUFFT)
         plan1.execute(z_T, s_T)
-        gamma_new = np.sum(np.abs(s_T)**2, axis=1)              # (K,)
+        gamma_new = np.sum(s_T.real**2 + s_T.imag**2, axis=1)               # (K,)
 
         rel_res = np.max(np.sqrt(gamma_new) / norm_s0)
         if rel_res < tol:
@@ -369,20 +369,23 @@ def _invert_nufft_block_cgls_shared(theta_j,
     T_out = pyfftw.empty_aligned((K, 2*N), dtype='complex128')
     ifft_T = pyfftw.FFTW(T_ifft_in, T_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads, flags=('FFTW_ESTIMATE',))
 
-    # 3. Fast Toeplitz Matrix-Vector Multiplication via FFT
+    # 3. Fast Toeplitz Matrix-Vector Multiplication via FFT (zero allocations in loop)
+    scale_2N = 1.0 / (2.0 * N)
     def T_op(X):
-        T_in[:] = 0.0
         T_in[:, :N] = X
+        T_in[:, N:] = 0.0
         fft_T.execute()
-        T_ifft_in[:] = T_hat * V_hat
+        np.multiply(T_hat, V_hat, out=T_ifft_in)
         ifft_T.execute()
-        return (T_out[:, :N].copy() / (2.0 * N)) + (reg_param) * X
+        return (T_out[:, :N] * scale_2N) + (reg_param * X)
 
     # 4. Circulant Preconditioner via T. Chan's Optimal Formula
     k = np.arange(N)
     c_chan = ((N - k) / N) * v_raw[N : 2*N] + (k / N) * v_raw[0 : N]
     
-    eig_c = np.abs(fftw_fft.fft(c_chan, threads=n_threads, planner_effort='FFTW_ESTIMATE')) + precond_shift
+    # Pre-shift circulant column once so M_inv requires zero in-loop array shifts
+    c_chan_shift = fftw_fft.ifftshift(c_chan)
+    eig_c = np.abs(fftw_fft.fft(c_chan_shift, threads=n_threads, planner_effort='FFTW_ESTIMATE')) + precond_shift
     eig_c_inv = (1.0 / eig_c)[None, :]
 
     M_in = pyfftw.empty_aligned((K, N), dtype='complex128')
@@ -393,12 +396,13 @@ def _invert_nufft_block_cgls_shared(theta_j,
     M_out = pyfftw.empty_aligned((K, N), dtype='complex128')
     ifft_M = pyfftw.FFTW(M_ifft_in, M_out, axes=(1,), direction='FFTW_BACKWARD', threads=n_threads, flags=('FFTW_ESTIMATE',))
 
+    scale_N = 1.0 / N
     def M_inv(V):
-        M_in[:] = fftw_fft.ifftshift(V, axes=1)
+        M_in[:] = V
         fft_M.execute()
-        M_ifft_in[:] = M_hat * eig_c_inv
+        np.multiply(M_hat, eig_c_inv, out=M_ifft_in)
         ifft_M.execute()
-        return fftw_fft.fftshift(M_out / N, axes=1).copy()
+        return M_out * scale_N
 
     # 5. Solve using Block CG (Normal Equations)
     X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
