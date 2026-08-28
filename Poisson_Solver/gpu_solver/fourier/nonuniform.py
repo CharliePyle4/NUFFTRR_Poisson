@@ -198,8 +198,8 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
     c_T = cp.zeros((K, N), dtype=cp.complex128)
     r_T = f_T.copy()  # Spatial residual r = f - A c
 
-    # Optimal density-compensating weights (analytic Voronoi trapezoidal in 0.01ms)
-    w = cp.ascontiguousarray(_compute_pipe_menon_weights(theta, n_iter=0, eps=eps)[None, :], dtype=cp.float64)  # (1, N)
+    # Compute optimal Pipe & Menon weights
+    w = cp.ascontiguousarray(_compute_pipe_menon_weights(theta, n_iter=2, eps=eps)[None, :], dtype=cp.float64)  # (1, N)
 
     # Initialize cuFINUFFT Guru Plans once outside CGLS loop
     plan1 = cufinufft.Plan(1, (N,), n_trans=K, isign=-1, eps=eps, dtype=np.complex128)
