@@ -345,14 +345,13 @@ def _invert_nufft_block_cgls_shared(theta_j,
     V_hat = cp.fft.fft(v_shift)[None, :]  # (1, 2N)
 
     # 3. Fast Toeplitz Matrix-Vector Multiplication via cuFFT (pre-allocated buffer)
-    scale_2N = 1.0 / (2.0 * N)
     T_in = cp.zeros((K, 2*N), dtype=cp.complex128)
     def T_op(X):
         T_in[:, :N] = X
         T_in[:, N:] = 0.0
         T_hat = cp.fft.fft(T_in, axis=1)
         T_out = cp.fft.ifft(T_hat * V_hat, axis=1)
-        return (T_out[:, :N] * scale_2N) + (reg_param * X)
+        return T_out[:, :N] + (reg_param * X)
 
     # 4. Circulant Preconditioner via T. Chan's Optimal Formula
     k = cp.arange(N)
@@ -360,12 +359,11 @@ def _invert_nufft_block_cgls_shared(theta_j,
     c_chan_shift = cp.fft.ifftshift(c_chan)
     eig_c = cp.abs(cp.fft.fft(c_chan_shift)) + precond_shift
     eig_c_inv = (1.0 / eig_c)[None, :]
-    scale_N = 1.0 / N
 
     def M_inv(V):
         M_hat = cp.fft.fft(V, axis=1)
         M_out = cp.fft.ifft(M_hat * eig_c_inv, axis=1)
-        return M_out * scale_N
+        return M_out
 
     # 5. Solve using Block CG (Normal Equations)
     X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
