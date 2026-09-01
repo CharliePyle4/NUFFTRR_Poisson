@@ -103,13 +103,13 @@ def compute_C_D_nonuniform(
             # Reshape for broadcasting (M-2, 1)
             r_im1_c, r_i_c, r_ip1_c = r_im1[:, None], r_i[:, None], r_ip1[:, None]
 
-            F_C_0 = (r_im1_c / (2 * k)) * (r_ip1_c / r_im1_c)**k * f_pos_im1
-            F_C_1 = (r_i_c / (2 * k)) * (r_ip1_c / r_i_c)**k * f_pos_i
+            F_C_0 = (r_im1_c / (2 * k)) * (r_im1_c / r_ip1_c)**(-k) * f_pos_im1
+            F_C_1 = (r_i_c / (2 * k)) * (r_i_c / r_ip1_c)**(-k) * f_pos_i
             F_C_2 = (r_ip1_c / (2 * k)) * f_pos_ip1
 
             F_D_0 = (-r_im1_c / (2 * n)) * f_neg_im1
             F_D_1 = (-r_i_c / (2 * n)) * (r_im1_c / r_i_c)**n * f_neg_i
-            F_D_2 = (-r_ip1_c / (2 * n)) * (r_im1_c / r_i_c)**n * f_neg_ip1
+            F_D_2 = (-r_ip1_c / (2 * n)) * (r_im1_c / r_ip1_c)**n * f_neg_ip1
 
             int_C = w0[:, None] * F_C_0 + w1[:, None] * F_C_1 + w2[:, None] * F_C_2
             int_D = w0[:, None] * F_D_0 + w1[:, None] * F_D_1 + w2[:, None] * F_D_2
