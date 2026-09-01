@@ -100,7 +100,7 @@ def compute_C_D_nonuniform(
             D[0, 0] = delta[0] / 2.0 * (r_m[1] * np.log(r_m[1]) * f_max[1])
 
     elif quad_rule == 2:
-        # ----- Simpson on nonuniform mesh (vectorized) -----
+        # ----- Simpson on nonuniform mesh (vectorized via analytical weights) -----
         n_arr = np.arange(1, halfN + 1)
         k_arr = -halfN + n_arr - 1
 
@@ -110,27 +110,22 @@ def compute_C_D_nonuniform(
         r_i = r_m[i_vals]
         r_ip1 = r_m[i_vals + 1]
 
-        # Build stack of interpolation matrices A and invert them in a batch
-        A_stack = np.zeros((M - 2, 3, 3), dtype=float)
-        A_stack[:, 0, 0] = r_im1**2; A_stack[:, 0, 1] = r_im1; A_stack[:, 0, 2] = 1.0
-        A_stack[:, 1, 0] = r_i**2;   A_stack[:, 1, 1] = r_i;   A_stack[:, 1, 2] = 1.0
-        A_stack[:, 2, 0] = r_ip1**2; A_stack[:, 2, 1] = r_ip1; A_stack[:, 2, 2] = 1.0
-        A_inv_stack = np.linalg.inv(A_stack)
-
-        # Integral terms (M-2, 1)
-        dx3 = (r_ip1**3 - r_im1**3)[:, None]
-        dx2 = (r_ip1**2 - r_im1**2)[:, None]
-        dx1 = (r_ip1 - r_im1)[:, None]
+        # Analytical nonuniform Simpson quadrature weights for [r_im1, r_ip1]
+        h0 = r_i - r_im1
+        h1 = r_ip1 - r_i
+        H = h0 + h1
+        w0 = (H * (2.0 * h0 - h1)) / (6.0 * h0)
+        w1 = (H**3) / (6.0 * h0 * h1)
+        w2 = (H * (2.0 * h1 - h0)) / (6.0 * h1)
 
         # --- C and D for modes n = 1..N/2 ---
         if halfN > 0:
-            n = n_arr[None, :] # (1, N/2)
-            k = k_arr[None, :] # (1, N/2)
+            n = n_arr[None, :]  # (1, N/2)
+            k = k_arr[None, :]  # (1, N/2)
             f_pos = f_fourier_coeff[:halfN, :]
             f_neg = f_fourier_coeff[halfN + 1:, :]
 
             # Function values at stencil points for all modes and all i
-            # Shapes are (M-2, N/2)
             f_pos_im1 = f_pos[:, i_vals - 1].T
             f_pos_i = f_pos[:, i_vals].T
             f_pos_ip1 = f_pos[:, i_vals + 1].T
@@ -141,31 +136,22 @@ def compute_C_D_nonuniform(
             # Reshape for broadcasting (M-2, 1)
             r_im1_c, r_i_c, r_ip1_c = r_im1[:, None], r_i[:, None], r_ip1[:, None]
 
-            # Build stacks of function values to be integrated (M-2, 3, N/2)
             with np.errstate(divide='ignore', invalid='ignore'):
-                F_C_stack = np.empty((M - 2, 3, halfN), dtype=complex)
-                F_C_stack[:, 0, :] = (r_im1_c / (2 * k)) * (r_ip1_c / r_im1_c)**k * f_pos_im1
-                F_C_stack[:, 1, :] = (r_i_c / (2 * k)) * (r_ip1_c / r_i_c)**k * f_pos_i
-                F_C_stack[:, 2, :] = (r_ip1_c / (2 * k)) * f_pos_ip1
+                F_C_0 = (r_im1_c / (2 * k)) * (r_ip1_c / r_im1_c)**k * f_pos_im1
+                F_C_1 = (r_i_c / (2 * k)) * (r_ip1_c / r_i_c)**k * f_pos_i
+                F_C_2 = (r_ip1_c / (2 * k)) * f_pos_ip1
 
-                F_D_stack = np.empty((M - 2, 3, halfN), dtype=complex)
-                F_D_stack[:, 0, :] = (-r_im1_c / (2 * n)) * f_neg_im1
-                F_D_stack[:, 1, :] = (-r_i_c / (2 * n)) * (r_im1_c / r_i_c)**n * f_neg_i
-                F_D_stack[:, 2, :] = (-r_ip1_c / (2 * n)) * (r_im1_c / r_ip1_c)**n * f_neg_ip1
+                F_D_0 = (-r_im1_c / (2 * n)) * f_neg_im1
+                F_D_1 = (-r_i_c / (2 * n)) * (r_im1_c / r_i_c)**n * f_neg_i
+                F_D_2 = (-r_ip1_c / (2 * n)) * (r_im1_c / r_ip1_c)**n * f_neg_ip1
 
-            # Batched solve for quadratic coefficients (M-2, 3, N/2)
-            coeff_C = A_inv_stack @ F_C_stack
-            coeff_D = A_inv_stack @ F_D_stack
-
-            # Compute integrals from coefficients (M-2, N/2)
-            int_C = (coeff_C[:, 0] / 3) * dx3 + (coeff_C[:, 1] / 2) * dx2 + coeff_C[:, 2] * dx1
-            int_D = (coeff_D[:, 0] / 3) * dx3 + (coeff_D[:, 1] / 2) * dx2 + coeff_D[:, 2] * dx1
+            int_C = w0[:, None] * F_C_0 + w1[:, None] * F_C_1 + w2[:, None] * F_C_2
+            int_D = w0[:, None] * F_D_0 + w1[:, None] * F_D_1 + w2[:, None] * F_D_2
 
             C[:halfN, 1:] = int_C.T
             D[1:, 1:] = int_D.T
 
         # --- Endpoint C and D (column 0) using Trapezoidal rule ---
-        # This is for C^(1,2) and D^(M-1,M) from the paper
         if halfN > 0:
             with np.errstate(divide='ignore', invalid='ignore'):
                 C[:halfN, 0] = (delta[0]**2 / (4.0 * k_arr)) * f_fourier_coeff[:halfN, 1]
@@ -176,49 +162,38 @@ def compute_C_D_nonuniform(
 
         # --- Highest frequency mode n=N/2 for C ---
         f_max = f_fourier_coeff[halfN, :]
-        f_trip_Cmax = np.vstack([
-            r_im1 * f_max[i_vals - 1],
-            r_i * f_max[i_vals],
-            r_ip1 * f_max[i_vals + 1]
-        ]).T
-        coeff_max = np.einsum('ijk,ik->ij', A_inv_stack, f_trip_Cmax)
-        int_Cmax = (coeff_max[:, 0] / 3) * dx3.ravel() + (coeff_max[:, 1] / 2) * dx2.ravel() + coeff_max[:, 2] * dx1.ravel()
+        int_Cmax = (
+            w0 * (r_im1 * f_max[i_vals - 1])
+            + w1 * (r_i * f_max[i_vals])
+            + w2 * (r_ip1 * f_max[i_vals + 1])
+        )
         C[halfN, 1:] = int_Cmax
-        C[halfN, 0] = (r_m[1]**2 / 2.0) * f_fourier_coeff[halfN, 1] # Trapezoidal
+        C[halfN, 0] = (r_m[1]**2 / 2.0) * f_fourier_coeff[halfN, 1]
 
         # --- Zero mode n=0 for D (with logs) ---
-        with np.errstate(invalid='ignore'): # handle log(0)
+        with np.errstate(invalid='ignore'):
             if M > 3:
                 i_log = np.arange(2, M - 1)
-                r_log_im1, r_log_i, r_log_ip1 = r_m[i_log - 1], r_m[i_log], r_m[i_log + 1]
-                
-                A_log_stack = np.zeros((M - 3, 3, 3), dtype=float)
-                A_log_stack[:, 0, 0] = r_log_im1**2; A_log_stack[:, 0, 1] = r_log_im1; A_log_stack[:, 0, 2] = 1.0
-                A_log_stack[:, 1, 0] = r_log_i**2;   A_log_stack[:, 1, 1] = r_log_i;   A_log_stack[:, 1, 2] = 1.0
-                A_log_stack[:, 2, 0] = r_log_ip1**2; A_log_stack[:, 2, 1] = r_log_ip1; A_log_stack[:, 2, 2] = 1.0
-                A_inv_log_stack = np.linalg.inv(A_log_stack)
+                w0_log, w1_log, w2_log = w0[1:], w1[1:], w2[1:]
+                r_log_im1, r_log_i, r_log_ip1 = r_im1[1:], r_i[1:], r_ip1[1:]
 
-                f_trip_D0 = np.vstack([
-                    r_log_im1 * np.log(r_log_im1) * f_max[i_log - 1],
-                    r_log_i * np.log(r_log_i) * f_max[i_log],
-                    r_log_ip1 * np.log(r_log_ip1) * f_max[i_log + 1]
-                ]).T
-                
-                coeff_D0 = np.einsum('ijk,ik->ij', A_inv_log_stack, f_trip_D0)
-                dx3_log = (r_log_ip1**3 - r_log_im1**3)
-                dx2_log = (r_log_ip1**2 - r_log_im1**2)
-                dx1_log = (r_log_ip1 - r_log_im1)
-                D[0, 2:] = (coeff_D0[:, 0] / 3) * dx3_log + (coeff_D0[:, 1] / 2) * dx2_log + coeff_D0[:, 2] * dx1_log
+                D[0, 2:] = (
+                    w0_log * (r_log_im1 * np.log(r_log_im1) * f_max[i_log - 1])
+                    + w1_log * (r_log_i * np.log(r_log_i) * f_max[i_log])
+                    + w2_log * (r_log_ip1 * np.log(r_log_ip1) * f_max[i_log + 1])
+                )
 
             # Edge cases for D[0,:]
             if M > 2:
-                r_trip0 = np.array([r_m[0], r_m[1], r_m[2]])
-                f_trip_D0 = np.array([
-                    0.0,
-                    r_m[1] * np.log(r_m[1]) * f_fourier_coeff[halfN, 1],
-                    r_m[2] * np.log(r_m[2]) * f_fourier_coeff[halfN, 2],
-                ], dtype=complex)
-                D[0, 1] = nonuniform_simps_rule(r_trip0, f_trip_D0)
+                h0_e = r_m[1] - r_m[0]
+                h1_e = r_m[2] - r_m[1]
+                H_e = h0_e + h1_e
+                w1_e = (H_e**3) / (6.0 * h0_e * h1_e)
+                w2_e = (H_e * (2.0 * h1_e - h0_e)) / (6.0 * h1_e)
+                D[0, 1] = (
+                    w1_e * (r_m[1] * np.log(r_m[1]) * f_fourier_coeff[halfN, 1])
+                    + w2_e * (r_m[2] * np.log(r_m[2]) * f_fourier_coeff[halfN, 2])
+                )
 
             # D^(M-1,M) for n=0 mode (trapezoidal rule on last interval)
             if M > 1:
