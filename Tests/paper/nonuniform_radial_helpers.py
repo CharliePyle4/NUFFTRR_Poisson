@@ -192,6 +192,47 @@ def set_timing_config(time_trials=False, num_runs=5, use_gpu=False):
     GLOBAL_USE_GPU = bool(use_gpu)
 
 
+# ==============================================================================
+# Helper Functions for Radial Labels and Ordering
+# ==============================================================================
+
+def normalize_radial_label(label: str) -> str:
+    """
+    Normalize radial grid labels so they never display 'Adapted'.
+    Example:
+        'Adapted Nonuniform (Squared)' -> 'Nonuniform (Squared)'
+        'Adapted Nonuniform (Sinh)'    -> 'Nonuniform (Sinh)'
+        'Adapted Core Radial (Squared)'-> 'Nonuniform (Squared)'
+        'Adapted Boundary Radial (Sinh)'-> 'Nonuniform (Sinh)'
+    """
+    if not isinstance(label, str):
+        return label
+    cleaned = label.replace("Adapted ", "").replace("Adapted / ", "")
+    cleaned = cleaned.replace("Core Radial (Squared)", "Nonuniform (Squared)")
+    cleaned = cleaned.replace("Boundary Radial (Sinh)", "Nonuniform (Sinh)")
+    return cleaned
+
+
+def sort_radial_columns(columns):
+    """
+    Sort radial grid labels so that the ordering is:
+    1. Uniform Radial
+    2. Chebyshev-Lobatto
+    3. Nonuniform (Squared, Sinh, etc.)
+    """
+    def sort_key(col):
+        c = str(col).lower()
+        if "uniform" in c and "non" not in c:
+            return (0, c)
+        elif "chebyshev" in c:
+            return (1, c)
+        elif "nonuniform" in c or "non-uniform" in c:
+            return (2, c)
+        else:
+            return (3, c)
+    return sorted(columns, key=sort_key)
+
+
 def run_radial_benchmark_case(
     N,
     M,
@@ -235,12 +276,28 @@ def run_radial_benchmark_case(
     is_uniform = np.allclose(dr, dr[0], rtol=1e-8, atol=1e-12)
     rad_unif_flag = 1 if is_uniform else 0
 
+    # Pre-convert inputs to GPU device memory before the timing loop
+    if actual_use_gpu:
+        try:
+            import cupy as cp
+            f_in = cp.asarray(f_values)
+            g_in = cp.asarray(g_values)
+            r_in = cp.asarray(r_m)
+            th_in = cp.asarray(theta_solver)
+            u0_in = cp.asarray(u_fourier_0) if u_fourier_0 is not None else 0.0
+            cp.cuda.Stream.null.synchronize()
+        except Exception:
+            f_in, g_in, r_in, th_in, u0_in = f_values, g_values, r_m, theta_solver, u_fourier_0
+    else:
+        f_in, g_in, r_in, th_in, u0_in = f_values, g_values, r_m, theta_solver, u_fourier_0
+
     # 2. Timed Poisson Solve
     n_runs = num_runs if num_runs is not None else (NUM_RUNS if effective_time_trials else 1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
         runtimes = []
+        u_approx = None
         for _ in range(n_runs):
             if actual_use_gpu:
                 try:
@@ -252,13 +309,13 @@ def run_radial_benchmark_case(
             t0 = time.perf_counter()
 
             u_approx = poisson_solver(
-                f_values=f_values,
-                g_values=g_values,
-                u_fourier_0=u_fourier_0,
+                f_values=f_in,
+                g_values=g_in,
+                u_fourier_0=u0_in,
                 N=N,
                 M=M,
-                r_m=r_m,
-                theta_j=theta_solver,
+                r_m=r_in,
+                theta_j=th_in,
                 R=R,
                 quad_rule=quad_rule,
                 BC_choice=bc_choice,
@@ -281,6 +338,9 @@ def run_radial_benchmark_case(
         runtime = min(runtimes)
 
     # 3. Exact Solution and Error Metrics
+    if actual_use_gpu and hasattr(u_approx, "get"):
+        u_approx = u_approx.get()
+
     u_true = problem["u"](x_grid, y_grid)
     _, linf_rel, _, l2_rel = compute_error_metrics(
         u_approx, u_true, r_m, theta_solver
@@ -289,7 +349,7 @@ def run_radial_benchmark_case(
     return {
         "N": N,
         "M": M,
-        "rad_kind": rad_kind,
+        "rad_kind": normalize_radial_label(rad_kind),
         "is_uniform": is_uniform,
         "L2_rel": l2_rel,
         "Linf_rel": linf_rel,
@@ -367,7 +427,10 @@ def run_radial_grid_sweep(
             rows.append(res)
             pbar.update(1)
     pbar.close()
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if not df.empty and "rad_kind" in df.columns:
+        df["rad_kind"] = df["rad_kind"].apply(normalize_radial_label)
+    return df
 
 
 def run_nxm_grid_sweep(
@@ -435,19 +498,24 @@ def run_nxm_grid_sweep(
                 rows.append(res)
                 pbar.update(1)
     pbar.close()
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if not df.empty and "rad_kind" in df.columns:
+        df["rad_kind"] = df["rad_kind"].apply(normalize_radial_label)
+    return df
+
+
 
 
 # ==============================================================================
 # Visualization & Table Formatting Routines
 # ==============================================================================
 
-def plot_solution_and_radial_grids(problem, N=32, M=16, primary_kind="sinh", primary_label="Adapted Nonuniform Radial"):
+def plot_solution_and_radial_grids(problem, N=32, M=16, primary_kind="sinh", primary_label="Nonuniform Radial"):
     """
     Journal-style 1 x 3 visualization:
       (a) Exact solution 3D surface plot on disk,
       (b) Uniform radial polar grid,
-      (c) Adapted non-uniform radial polar grid.
+      (c) Non-uniform radial polar grid.
     """
     plt.rcParams.update({
         "font.size": 8,
@@ -523,9 +591,9 @@ def plot_solution_and_radial_grids(problem, N=32, M=16, primary_kind="sinh", pri
     ax1 = fig.add_subplot(gs[0, 1])
     draw_grid_lines(ax1, r_unif, f"(b) Uniform Radial Grid (M={M})", "#1f77b4")
 
-    # Subplot (c): Adapted Radial Grid
+    # Subplot (c): Nonuniform Radial Grid
     ax2 = fig.add_subplot(gs[0, 2])
-    draw_grid_lines(ax2, r_nonunif, f"(c) {primary_label} (M={M})", "#d62728")
+    draw_grid_lines(ax2, r_nonunif, f"(c) {normalize_radial_label(primary_label)} (M={M})", "#d62728")
 
     plt.show()
 
@@ -552,14 +620,20 @@ def plot_combined_radial_convergence_and_profiles(
 
     styles = {
         "Uniform Radial": ("#1f77b4", "o", "-"),
+        "Chebyshev-Lobatto": ("#2ca02c", "^", "-."),
+        "Nonuniform (Sinh)": ("#d62728", "s", "--"),
+        "Nonuniform (Squared)": ("#d62728", "s", "--"),
         "Adapted Nonuniform (Sinh)": ("#d62728", "s", "--"),
         "Adapted Nonuniform (Squared)": ("#d62728", "s", "--"),
-        "Chebyshev-Lobatto": ("#2ca02c", "^", "-."),
     }
 
     # Subplot (a): M-Refinement Convergence (Log-Log)
     ax0 = axes[0]
-    for method, grp in df_fixed_n.groupby("rad_kind"):
+    df_plot = df_fixed_n.copy()
+    df_plot["rad_kind"] = df_plot["rad_kind"].apply(normalize_radial_label)
+    methods_order = sort_radial_columns(df_plot["rad_kind"].unique())
+    for method in methods_order:
+        grp = df_plot[df_plot["rad_kind"] == method]
         color, marker, ls = styles.get(method, ("black", "d", ":"))
         grp_sorted = grp.sort_values("M")
         ax0.loglog(
@@ -582,8 +656,15 @@ def plot_combined_radial_convergence_and_profiles(
     # Subplot (b): Pointwise Error Profiles along Radial Ray r (Semilog-Y)
     ax1 = axes[1]
     M_eval = results_list[0]["M"]
-    for res in results_list:
-        label = res["rad_kind"]
+    sorted_results = sorted(
+        results_list,
+        key=lambda r: (
+            0 if ("uniform" in str(r["rad_kind"]).lower() and "non" not in str(r["rad_kind"]).lower())
+            else (1 if "chebyshev" in str(r["rad_kind"]).lower() else 2)
+        )
+    )
+    for res in sorted_results:
+        label = normalize_radial_label(res["rad_kind"])
         r_m = res["r_m"]
         color, marker, ls = styles.get(label, ("black", "d", ":"))
         err_ray = np.abs(res["u_approx"][0, :] - res["u_true"][0, :])
@@ -623,12 +704,18 @@ def plot_m_refinement_convergence(df_results, title="Radial M-Refinement Converg
     fig, ax = plt.subplots(figsize=(6.0, 3.8), dpi=150)
     styles = {
         "Uniform Radial": ("#1f77b4", "o", "-"),
+        "Chebyshev-Lobatto": ("#2ca02c", "^", "-."),
+        "Nonuniform (Sinh)": ("#d62728", "s", "--"),
+        "Nonuniform (Squared)": ("#d62728", "s", "--"),
         "Adapted Nonuniform (Sinh)": ("#d62728", "s", "--"),
         "Adapted Nonuniform (Squared)": ("#d62728", "s", "--"),
-        "Chebyshev-Lobatto": ("#2ca02c", "^", "-."),
     }
 
-    for method, grp in df_results.groupby("rad_kind"):
+    df_plot = df_results.copy()
+    df_plot["rad_kind"] = df_plot["rad_kind"].apply(normalize_radial_label)
+    methods_order = sort_radial_columns(df_plot["rad_kind"].unique())
+    for method in methods_order:
+        grp = df_plot[df_plot["rad_kind"] == method]
         color, marker, ls = styles.get(method, ("black", "d", ":"))
         grp_sorted = grp.sort_values("M")
         ax.loglog(
@@ -664,18 +751,20 @@ def plot_nxm_accuracy_grid(df_results, title="N x M Convergence Sweep"):
         "legend.fontsize": 7,
     })
 
-    methods = df_results["rad_kind"].unique()
+    df_plot = df_results.copy()
+    df_plot["rad_kind"] = df_plot["rad_kind"].apply(normalize_radial_label)
+    methods = sort_radial_columns(df_plot["rad_kind"].unique())
     n_methods = len(methods)
     fig, axes = plt.subplots(1, n_methods, figsize=(3.5 * n_methods, 3.5), sharey=True, dpi=150)
     if n_methods == 1:
         axes = [axes]
 
     cmap = plt.get_cmap("tab10")
-    N_vals = sorted(df_results["N"].unique())
+    N_vals = sorted(df_plot["N"].unique())
 
     for idx, method in enumerate(methods):
         ax = axes[idx]
-        sub = df_results[df_results["rad_kind"] == method]
+        sub = df_plot[df_plot["rad_kind"] == method]
         for i, N in enumerate(N_vals):
             grp = sub[sub["N"] == N].sort_values("M")
             ax.loglog(grp["M"], grp["Linf_rel"], "o-", color=cmap(i), label=f"N={N}", markersize=4, linewidth=1.2)
@@ -705,8 +794,15 @@ def plot_radial_error_profiles(results_list, title="Radial Ray Error Profiles"):
 
     fig, ax = plt.subplots(figsize=(6.0, 3.5), dpi=150)
 
-    for res in results_list:
-        label = res["rad_kind"]
+    sorted_results = sorted(
+        results_list,
+        key=lambda r: (
+            0 if ("uniform" in str(r["rad_kind"]).lower() and "non" not in str(r["rad_kind"]).lower())
+            else (1 if "chebyshev" in str(r["rad_kind"]).lower() else 2)
+        )
+    )
+    for res in sorted_results:
+        label = normalize_radial_label(res["rad_kind"])
         r_m = res["r_m"]
         err_ray = np.abs(res["u_approx"][0, :] - res["u_true"][0, :])
         ax.semilogy(r_m, err_ray + 1e-16, label=f"{label} (M={res['M']})", linewidth=1.2)
@@ -728,10 +824,15 @@ def render_nxm_accuracy_table(df_results, value_col="Linf_rel", title="Accuracy 
     """
     Render N x M Accuracy table (Pivot: index N, columns [rad_kind, M]).
     Accuracies rendered FIRST.
+    Column ordering: Uniform Radial -> Chebyshev-Lobatto -> Nonuniform.
     """
     if title:
         display(HTML(f"<h4 style='font-size: 13px; font-weight: bold; margin-top: 15px; margin-bottom: 5px;'>{title}</h4>"))
-    pivot = df_results.pivot_table(index="N", columns=["rad_kind", "M"], values=value_col, aggfunc="first")
+    df = df_results.copy()
+    df["rad_kind"] = df["rad_kind"].apply(normalize_radial_label)
+    pivot = df.pivot_table(index="N", columns=["rad_kind", "M"], values=value_col, aggfunc="first")
+    ordered_rad_kinds = sort_radial_columns(pivot.columns.levels[0])
+    pivot = pivot.reindex(columns=ordered_rad_kinds, level=0)
     display(HTML(pivot.map(lambda v: f"{v:.2e}" if np.isfinite(v) else "—").to_html(classes="table table-bordered text-center")))
 
 
@@ -739,21 +840,34 @@ def render_nxm_runtime_table(df_results, title="Runtime Table: Solve Time (ms)")
     """
     Render N x M Runtime table (Pivot: index N, columns [rad_kind, M]).
     Runtimes rendered LAST.
+    Column ordering: Uniform Radial -> Chebyshev-Lobatto -> Nonuniform.
     """
     if title:
         display(HTML(f"<h4 style='font-size: 13px; font-weight: bold; margin-top: 15px; margin-bottom: 5px;'>{title}</h4>"))
-    pivot = df_results.pivot_table(index="N", columns=["rad_kind", "M"], values="runtime", aggfunc="first") * 1000.0
+    df = df_results.copy()
+    df["rad_kind"] = df["rad_kind"].apply(normalize_radial_label)
+    pivot = df.pivot_table(index="N", columns=["rad_kind", "M"], values="runtime", aggfunc="first") * 1000.0
+    ordered_rad_kinds = sort_radial_columns(pivot.columns.levels[0])
+    pivot = pivot.reindex(columns=ordered_rad_kinds, level=0)
     display(HTML(pivot.map(lambda v: f"{v:.2f} ms" if np.isfinite(v) else "—").to_html(classes="table table-bordered text-center")))
 
 
 def render_fixed_n_accuracy_table(df_results, title="Accuracy Table (Fixed N, Varying M)"):
     """
     Render Fixed-N Accuracy table (Relative L2 and Linf errors). Accuracies FIRST.
+    Column ordering: Uniform Radial -> Chebyshev-Lobatto -> Nonuniform.
     """
     if title:
         display(HTML(f"<h4 style='font-size: 13px; font-weight: bold; margin-top: 15px; margin-bottom: 5px;'>{title}</h4>"))
-    pivot_linf = df_results.pivot_table(index="M", columns="rad_kind", values="Linf_rel", aggfunc="first")
-    pivot_l2 = df_results.pivot_table(index="M", columns="rad_kind", values="L2_rel", aggfunc="first")
+    df = df_results.copy()
+    df["rad_kind"] = df["rad_kind"].apply(normalize_radial_label)
+
+    pivot_linf = df.pivot_table(index="M", columns="rad_kind", values="Linf_rel", aggfunc="first")
+    pivot_l2 = df.pivot_table(index="M", columns="rad_kind", values="L2_rel", aggfunc="first")
+
+    ordered_cols = sort_radial_columns(pivot_linf.columns)
+    pivot_linf = pivot_linf.reindex(columns=ordered_cols)
+    pivot_l2 = pivot_l2.reindex(columns=ordered_cols)
 
     combined = pd.concat([pivot_linf], keys=["Relative Linf Error"], axis=1)
     combined_l2 = pd.concat([pivot_l2], keys=["Relative L2 Error"], axis=1)
@@ -765,9 +879,16 @@ def render_fixed_n_accuracy_table(df_results, title="Accuracy Table (Fixed N, Va
 def render_fixed_n_runtime_table(df_results, title="Runtime Table (Fixed N, Varying M)"):
     """
     Render Fixed-N Runtime table (Solve time in ms). Runtimes LAST.
+    Column ordering: Uniform Radial -> Chebyshev-Lobatto -> Nonuniform.
     """
     if title:
         display(HTML(f"<h4 style='font-size: 13px; font-weight: bold; margin-top: 15px; margin-bottom: 5px;'>{title}</h4>"))
-    pivot = df_results.pivot_table(index="M", columns="rad_kind", values="runtime", aggfunc="first") * 1000.0
+    df = df_results.copy()
+    df["rad_kind"] = df["rad_kind"].apply(normalize_radial_label)
+
+    pivot = df.pivot_table(index="M", columns="rad_kind", values="runtime", aggfunc="first") * 1000.0
+    ordered_cols = sort_radial_columns(pivot.columns)
+    pivot = pivot.reindex(columns=ordered_cols)
+
     display(HTML(pivot.map(lambda v: f"{v:.2f} ms" if np.isfinite(v) else "—").to_html(classes="table table-bordered text-center")))
 
