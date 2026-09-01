@@ -389,24 +389,18 @@ def compute_C_D_nonuniform(
 
         if M > 2:
             # D[0, 1]: stencil is [r_m[0], r_m[1], r_m[2]], f evaluated at those points
-            # r_m[0] = 0, so r*log(r)*f = 0 at i=0 (limit is 0); handle via the same batched solve
-            r0, r1, r2 = r_m[0], r_m[1], r_m[2]
-            A_edge = cp.array([
-                [r0**2, r0, 1.0],
-                [r1**2, r1, 1.0],
-                [r2**2, r2, 1.0],
-            ], dtype=cp.float64)
-            f_edge = cp.array([
-                0.0,                                          # r*log(r)*f -> 0 at r=0
-                r1 * cp.log(r1) * f_fourier_coeff[N // 2, 1],
-                r2 * cp.log(r2) * f_fourier_coeff[N // 2, 2],
-            ], dtype=cp.complex128).reshape(3, 1)
+            # r_m[0] = 0, so r*log(r)*f = 0 at i=0 (limit is 0); handle via quadratic solve on GPU
+            r_sub = r_m[:3]
+            A_edge = cp.column_stack([r_sub**2, r_sub, cp.ones(3, dtype=cp.float64)])
+            f_edge = cp.zeros((3, 1), dtype=cp.complex128)
+            f_edge[1, 0] = r_sub[1] * cp.log(r_sub[1]) * f_fourier_coeff[N // 2, 1]
+            f_edge[2, 0] = r_sub[2] * cp.log(r_sub[2]) * f_fourier_coeff[N // 2, 2]
             coeff_edge = cp.linalg.solve(A_edge, f_edge)
-            dx3e = r2**3 - r0**3
-            dx2e = r2**2 - r0**2
-            dx1e = r2 - r0
-            D[0, 1] = (coeff_edge[0, 0] / 3) * dx3e \
-                    + (coeff_edge[1, 0] / 2) * dx2e \
+            dx3e = r_sub[2]**3 - r_sub[0]**3
+            dx2e = r_sub[2]**2 - r_sub[0]**2
+            dx1e = r_sub[2] - r_sub[0]
+            D[0, 1] = (coeff_edge[0, 0] / 3.0) * dx3e \
+                    + (coeff_edge[1, 0] / 2.0) * dx2e \
                     + coeff_edge[2, 0] * dx1e
         
         D[0, 0] = delta[M - 2] / 2.0 * (
