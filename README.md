@@ -22,7 +22,7 @@ The solver employs an azimuthal Fourier modal decomposition coupled with radial 
 
 - **Flexible Angular Discretizations**:
   - **Uniform Angular Grids (`grid_type=1`)**: Classical FFT via FFTW (CPU) or cuFFT (GPU).
-  - **Non-Uniform Angular Grids (`grid_type=2`)**: Normal-equations Block-CG solver with FFT-accelerated circular Kernel Density Estimation (KDE) and Tony Chan's optimal circulant preconditioner.
+  - **Non-Uniform Angular Grids (`grid_type=2`)**: Circulant-preconditioned Toeplitz PCG solver (batched across radial levels) with FFT-accelerated circular Kernel Density Estimation (KDE) and T. Chan's optimal circulant preconditioner.
   - **Non-Uniform Angular Grids (`grid_type=3`)**: Unsquared Preconditioned Conjugate Gradient for Least Squares (PCGLS) with Pipe & Menon iterative density compensation.
   - **Direct NUDFT (`use_nudft_angular=True`)**: Dense regularized non-uniform discrete Fourier transform reference solve.
 - **Flexible Radial Discretizations**:
@@ -130,7 +130,7 @@ g_nu = 3 * np.exp(x_nu[:, -1] + y_nu[:, -1]) * (x_nu[:, -1] - x_nu[:, -1]**2) * 
 u_exact_nu = 3 * np.exp(x_nu + y_nu) * (x_nu - x_nu**2) * (y_nu - y_nu**2) + 5
 u_0_nu = compute_zero_mode(u_exact_nu, theta_nonunif, azu_unif=1)
 
-# Solve using Unsquared PCGLS (grid_type=3) or Block-CG (grid_type=2)
+# Solve using Unsquared PCGLS (grid_type=3) or Toeplitz PCG (grid_type=2)
 u_approx_nu = poisson_solver(
     f_values=f_nu,
     g_values=g_nu,
@@ -143,7 +143,7 @@ u_approx_nu = poisson_solver(
     quad_rule=1,
     BC_choice=1,
     rad_unif=1,
-    grid_type=3,           # 3: Unsquared PCGLS, 2: Block-CG
+    grid_type=3,           # 3: Unsquared PCGLS, 2: Toeplitz PCG
     maxiter_nufft=200,
     tol_nufft=1e-10,
     reg_param=1e-12,
@@ -195,13 +195,13 @@ def poisson_solver(
 | `quad_rule` | `int` | *Required* | Radial quadrature rule: `1` for Trapezoidal, `2` for 3-point Simpson variant. |
 | `BC_choice` | `int` | *Required* | Boundary condition: `1` for Dirichlet, `2` for Neumann. |
 | `rad_unif` | `int` | *Required* | Radial grid type: `1` for uniform spacing, `0` for non-uniform spacing. |
-| `grid_type` | `int` | *Required* | Angular solver strategy: `1` for uniform FFT, `2` for Toeplitz Block-CG, `3` for Unsquared PCGLS. |
+| `grid_type` | `int` | *Required* | Angular solver strategy: `1` for uniform FFT, `2` for Circulant-Preconditioned Toeplitz PCG, `3` for Unsquared PCGLS. |
 | `use_nudft_angular` | `bool` | `False` | When `True` on non-uniform angles, uses direct dense NUDFT solve instead of NUFFT. |
 | `maxiter_nufft` | `int` | `50` | Maximum number of conjugate gradient iterations for NUFFT coefficient recovery. |
 | `tol_nufft` | `float` | `1e-8` | Convergence tolerance for iterative NUFFT CG solvers. |
 | `reg_param` | `float` | `1e-12` | Tikhonov regularization parameter ($\lambda$) for ill-conditioned angular frames. |
 | `eps_finufft` | `float` | `1e-12` | Target kernel precision for FINUFFT / cuFINUFFT transforms. |
-| `precond_shift` | `float` | `1e-3` | Spectral shift added to Tony Chan circulant preconditioner eigenvalues in Block-CG. |
+| `precond_shift` | `float` | `1e-3` | Spectral shift added to T. Chan circulant preconditioner eigenvalues in Toeplitz PCG. |
 | `kde_oversample` | `int` | `4` | Oversampling factor on the fine uniform grid for FFT-accelerated circular KDE. |
 | `kde_bandwidth` | `float` | `1.0` | Bandwidth multiplier for wrapped Gaussian smoothing kernel ($\sigma = \text{factor} \times \frac{2\pi}{N}$). |
 | `num_processors` | `int` | `None` | Number of threads to use in FFTW / FINUFFT thread pools. `None` defaults to all available CPU cores (`os.cpu_count()`). |
@@ -213,7 +213,17 @@ def poisson_solver(
 
 ## Tests Directory
 
-The `Tests/` directory contains tests currently being developed for the paper/preprint
+The `Tests/` directory contains tests and numerical experiments currently being developed for the paper/preprint.
+
+---
+
+## Citation
+
+If you use **NUFFTRR_Poisson** in your research, please cite our preprint:
+
+```bibtex
+To be added
+```
 
 ---
 
