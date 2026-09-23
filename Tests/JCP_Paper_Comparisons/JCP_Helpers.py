@@ -2,6 +2,7 @@ from tqdm.asyncio import tqdm
 import numpy as np
 import pandas as pd
 import sympy as sp
+import matplotlib.pyplot as plt
 from IPython.display import display
 import time
 
