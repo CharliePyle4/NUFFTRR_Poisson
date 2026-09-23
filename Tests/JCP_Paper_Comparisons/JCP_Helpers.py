@@ -15,7 +15,11 @@ from Poisson_Solver.grids import (
     generate_grid_values,
     compute_zero_mode
 )
-from Poisson_Solver.visualization import compute_error_metrics
+from Poisson_Solver.visualization import (
+    compute_error_metrics,
+    plot_on_disk,
+    plot_on_disk_with_error,
+)
 from Poisson_Solver.poisson_solver import poisson_solver
 
 ANGLE_MESH_CACHE = {}
