@@ -86,12 +86,13 @@ def build_radial_mesh(M, rad_unif, R):
         return generate_uniform_radial(M, R)
     return generate_nonuniform_radial(M, R)
 
-def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, num_processors=None, use_gpu=False, **kwargs):
     bc_choice = BC_MAP[bc_name]
     quad_rule = QUAD_MAP[quad_name]
 
     azu_unif = method_cfg["azu_unif"]
     use_nudft = method_cfg["use_nudft"]
+    grid_type = method_cfg.get("grid_type", 1 if azu_unif == 2 else azu_unif)
 
     iRadius = build_radial_mesh(M, rad_unif, R)
     iAngle  = get_cached_angle_mesh(method_cfg, N, M)
@@ -116,7 +117,7 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
 
     # n = 0 mode for Neumann (phi_0), empty for Dirichlet
     if bc_choice == 2:
-        u_fourier_0_arr = compute_zero_mode(u_true, iAngle, method_cfg["azu_unif"])
+        u_fourier_0_arr = compute_zero_mode(u_true, iAngle, method_cfg["azu_unif"], num_processors=num_processors)
         u_fourier_0 = u_fourier_0_arr[-1]
     else:
         u_fourier_0 = np.array([])
@@ -127,10 +128,13 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
             f_values, g_values, u_fourier_0,
             N, M, iRadius, iAngle, R,
             quad_rule, bc_choice,
-            rad_unif, azu_unif,
+            rad_unif, grid_type,
             use_nudft_angular=(use_nudft if use_nudft is not None else False),
             maxiter_nufft=50,
             tol_nufft=1e-8,
+            num_processors=num_processors,
+            use_gpu=use_gpu,
+            **kwargs
         )
         solve_time = time.perf_counter() - start_time
 
@@ -155,12 +159,13 @@ def run_single_case(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         "time": solve_time,
     }
 
-def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, num_processors=None, use_gpu=False, **kwargs):
     bc_choice = BC_MAP[bc_name]
     quad_rule = QUAD_MAP[quad_name]
 
     azu_unif = method_cfg["azu_unif"]
     use_nudft = method_cfg.get("use_nudft", False)
+    grid_type = method_cfg.get("grid_type", 1 if azu_unif == 2 else azu_unif)
 
     iRadius = build_radial_mesh(M, rad_unif, R)
     iAngle  = get_cached_angle_mesh(method_cfg, N, M)
@@ -176,7 +181,7 @@ def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         g_values = generate_grid_values(lambda x_val, y_val: g_neumann(x_val, y_val, R), x_coord[:, M - 1], y_coord[:, M - 1])
 
     if bc_choice == 2:
-        u_fourier_0_arr = compute_zero_mode(u_true, iAngle, method_cfg["azu_unif"])
+        u_fourier_0_arr = compute_zero_mode(u_true, iAngle, method_cfg["azu_unif"], num_processors=num_processors)
         u_fourier_0 = u_fourier_0_arr[-1]
     else:
         u_fourier_0 = np.array([])
@@ -185,26 +190,30 @@ def solve_for_grids(N, M, method_cfg, bc_name, quad_name, u, f, g_dirichlet, g_n
         f_values, g_values, u_fourier_0,
         N, M, iRadius, iAngle, R,
         quad_rule, bc_choice,
-        rad_unif, azu_unif,
+        rad_unif, grid_type,
         use_nudft_angular=use_nudft,
         maxiter_nufft=50,
         tol_nufft=1e-8,
+        num_processors=num_processors,
+        use_gpu=use_gpu,
+        **kwargs
     )
     return x_coord, y_coord, u_approx, u_true
 
-def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, **kwargs):
     table1_results = []
     for method in methods:
         for N in N_values:
             for M in M_values:
                 res = run_single_case(
                     N=N, M=M, method_cfg=method, bc_name="dirichlet", quad_name="trapezoidal",
-                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                    **kwargs
                 )
                 table1_results.append(res)
     return pd.DataFrame(table1_results)
 
-def run_table_2(methods, N_fixed, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def run_table_2(methods, N_fixed, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, **kwargs):
     table2_results = []
     for method in methods:
         for M in M_values:
@@ -212,7 +221,8 @@ def run_table_2(methods, N_fixed, M_values, u, f, g_dirichlet, g_neumann, BC_MAP
                 for bc_name in ["dirichlet", "neumann"]:
                     res = run_single_case(
                         N=N_fixed, M=M, method_cfg=method, bc_name=bc_name, quad_name=quad_name,
-                        u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                        u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                        **kwargs
                     )
                     table2_results.append(res)
     return pd.DataFrame(table2_results)
@@ -283,14 +293,15 @@ def setup_problem_7():
     u_sym = sp.cos(10 * sp.pi * x) * sp.cos(10 * sp.pi * y)
     return get_problem_functions(u_sym, x, y)
 
-def run_timing_analysis(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R):
+def run_timing_analysis(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, **kwargs):
     timing_results = []
     for method in methods:
         for N in N_values:
             for M in M_values:
                 res = run_single_case(
                     N=N, M=M, method_cfg=method, bc_name="dirichlet", quad_name="trapezoidal",
-                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann, BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                    **kwargs
                 )
                 timing_results.append({
                     "method": method["name"],
@@ -315,7 +326,7 @@ def display_timing_results(df_timing, methods, N_values, M_values):
 
 from tqdm.auto import tqdm
 
-def run_table_1_tracked(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, desc="Running", position=1):
+def run_table_1_tracked(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, desc="Running", position=1, **kwargs):
     table1_results = []
     total = len(methods) * len(N_values) * len(M_values)
 
@@ -327,7 +338,8 @@ def run_table_1_tracked(methods, N_values, M_values, u, f, g_dirichlet, g_neuman
                 res = run_single_case(
                     N=N, M=M, method_cfg=method, bc_name="dirichlet", quad_name="trapezoidal",
                     u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann,
-                    BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R
+                    BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                    **kwargs
                 )
                 wall_time = time.perf_counter() - case_start
                 res["wall_time"] = wall_time
