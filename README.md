@@ -23,7 +23,7 @@ The solver employs an azimuthal Fourier modal decomposition coupled with radial 
 - **Flexible Angular Discretizations**:
   - **Uniform Angular Grids (`grid_type=1`)**: Classical FFT via FFTW (CPU) or cuFFT (GPU).
   - **Non-Uniform Angular Grids (`grid_type=2`)**: Circulant-preconditioned Toeplitz PCG solver (batched across radial levels) with FFT-accelerated circular Kernel Density Estimation (KDE) and T. Chan's optimal circulant preconditioner.
-  - **Non-Uniform Angular Grids (`grid_type=3`)**: Unsquared Preconditioned Conjugate Gradient for Least Squares (PCGLS) with Pipe & Menon iterative density compensation.
+  - **Non-Uniform Angular Grids (`grid_type=3`)**: Preconditioned Conjugate Gradient for Least Squares (PCGLS) with Pipe & Menon iterative density compensation.
   - **Direct NUDFT (`use_nudft_angular=True`)**: Dense regularized non-uniform discrete Fourier transform reference solve.
 - **Flexible Radial Discretizations**:
   - **Uniform Radial Grids (`rad_unif=1`)** and **Non-Uniform Radial Grids (`rad_unif=0`)**.
@@ -130,7 +130,7 @@ g_nu = 3 * np.exp(x_nu[:, -1] + y_nu[:, -1]) * (x_nu[:, -1] - x_nu[:, -1]**2) * 
 u_exact_nu = 3 * np.exp(x_nu + y_nu) * (x_nu - x_nu**2) * (y_nu - y_nu**2) + 5
 u_0_nu = compute_zero_mode(u_exact_nu, theta_nonunif, azu_unif=1)
 
-# Solve using Unsquared PCGLS (grid_type=3) or Toeplitz PCG (grid_type=2)
+# Solve using PCGLS (grid_type=3) or Toeplitz PCG (grid_type=2)
 u_approx_nu = poisson_solver(
     f_values=f_nu,
     g_values=g_nu,
@@ -143,7 +143,7 @@ u_approx_nu = poisson_solver(
     quad_rule=1,
     BC_choice=1,
     rad_unif=1,
-    grid_type=3,           # 3: Unsquared PCGLS, 2: Toeplitz PCG
+    grid_type=3,           # 3: PCGLS, 2: Toeplitz PCG
     maxiter_nufft=200,
     tol_nufft=1e-10,
     reg_param=1e-12,
@@ -195,7 +195,7 @@ def poisson_solver(
 | `quad_rule` | `int` | *Required* | Radial quadrature rule: `1` for Trapezoidal, `2` for 3-point Simpson variant. |
 | `BC_choice` | `int` | *Required* | Boundary condition: `1` for Dirichlet, `2` for Neumann. |
 | `rad_unif` | `int` | *Required* | Radial grid type: `1` for uniform spacing, `0` for non-uniform spacing. |
-| `grid_type` | `int` | *Required* | Angular solver strategy: `1` for uniform FFT, `2` for Circulant-Preconditioned Toeplitz PCG, `3` for Unsquared PCGLS. |
+| `grid_type` | `int` | *Required* | Angular solver strategy: `1` for uniform FFT, `2` for Circulant-Preconditioned Toeplitz PCG, `3` for PCGLS. |
 | `use_nudft_angular` | `bool` | `False` | When `True` on non-uniform angles, uses direct dense NUDFT solve instead of NUFFT. |
 | `maxiter_nufft` | `int` | `50` | Maximum number of conjugate gradient iterations for NUFFT coefficient recovery. |
 | `tol_nufft` | `float` | `1e-8` | Convergence tolerance for iterative NUFFT CG solvers. |

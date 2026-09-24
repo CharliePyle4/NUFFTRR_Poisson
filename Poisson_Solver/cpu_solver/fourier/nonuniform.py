@@ -145,8 +145,8 @@ def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12, num_processors: int = None)
 
 
 # =============================================================================
-# Direct Unsquared CGLS (Paige & Saunders) — Strategy 2 (Avoids Normal Equations)
-# Solves min ||A c - f||_2 directly without squaring condition numbers.
+# Direct PCGLS (Paige & Saunders) with Pipe & Menon Density Compensation
+# Solves min ||W^{1/2} (A c - f)||_2 directly via paired Type-1/Type-2 NUFFTs.
 # =============================================================================
 def _compute_pipe_menon_weights(theta: np.ndarray,
                                 n_iter: int = 2,
@@ -185,13 +185,13 @@ def _compute_pipe_menon_weights(theta: np.ndarray,
     return w_arr.real[0, :]
 
 
-def _invert_nufft_cgls_unsquared(theta_j,
-                                 f_arr,
-                                 tol=1e-10,
-                                 maxiter=200,
-                                 eps=1e-12,
-                                 num_processors: int = None,
-                                 **kwargs):
+def _invert_nufft_pcgls(theta_j,
+                        f_arr,
+                        tol=1e-10,
+                        maxiter=200,
+                        eps=1e-12,
+                        num_processors: int = None,
+                        **kwargs):
     """
     High-Performance Preconditioned Conjugate Gradient for Least Squares (PCGLS).
     Uses persistent FINUFFT Guru Plans and Pipe & Menon optimal spatial weights.
@@ -265,7 +265,7 @@ def _invert_nufft_cgls_unsquared(theta_j,
 
 
 # =============================================================================
-# PREVIOUS NORMAL-EQUATIONS BLOCK CG SOLVER (COMMENTED OUT FOR REFERENCE)
+# Normal-Equations Toeplitz PCG Solver (grid_type = 2)
 # =============================================================================
 def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
     X = B.copy()
@@ -322,17 +322,17 @@ def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
     return X
 
 
-def _invert_nufft_block_cgls_shared(theta_j,
-                                    f,
-                                    tol=1e-8,
-                                    maxiter=50,
-                                    eps=1e-12,
-                                    reg_param=1e-12,
-                                    precond_shift=1e-3,
-                                    kde_oversample=4,
-                                    kde_bandwidth=1.0,
-                                    num_processors: int = None,
-                                    **kwargs):
+def _invert_nufft_toeplitz_pcg(theta_j,
+                               f,
+                               tol=1e-8,
+                               maxiter=50,
+                               eps=1e-12,
+                               reg_param=1e-12,
+                               precond_shift=1e-3,
+                               kde_oversample=4,
+                               kde_bandwidth=1.0,
+                               num_processors: int = None,
+                               **kwargs):
     n_threads = _resolve_num_processors(num_processors)
     theta_j = np.asarray(theta_j, dtype=float)
     f_orig = np.asarray(f, dtype=np.complex128)
@@ -404,7 +404,6 @@ def _invert_nufft_block_cgls_shared(theta_j,
         ifft_M.execute()
         return M_out * scale_N
 
-    # 5. Solve using Block CG (Normal Equations)
     X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
     X = X_T.T
     return X[:, 0] if f_orig.ndim == 1 else X
@@ -443,7 +442,7 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
                                   **kwargs) -> np.ndarray:
     """
     Computes azimuthal Fourier coefficients on non-uniform angular mesh theta_j.
-    Uses Pipe & Menon Unsquared PCGLS for NUFFT (grid_type=3) or Block-CG Toeplitz (grid_type=2)
+    Uses Pipe & Menon PCGLS for NUFFT (grid_type=3) or Toeplitz PCG (grid_type=2)
     or regularized least-squares for NUDFT.
     """
     f_values = np.asarray(f_values)
@@ -454,7 +453,7 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
     if use_nudft:
         coeff_core = _invert_nudft(theta_j, f_values, reg_param=reg_param)
     elif grid_type == 2:
-        coeff_core = _invert_nufft_block_cgls_shared(
+        coeff_core = _invert_nufft_toeplitz_pcg(
             theta_j, f_values,
             tol=tol, maxiter=maxiter, eps=eps,
             reg_param=reg_param,
@@ -465,7 +464,7 @@ def compute_fourier_coeff_nonunif(f_values: np.ndarray,
             **kwargs
         )
     else:
-        coeff_core = _invert_nufft_cgls_unsquared(
+        coeff_core = _invert_nufft_pcgls(
             theta_j, f_values,
             tol=tol, maxiter=maxiter, eps=eps,
             reg_param=reg_param,

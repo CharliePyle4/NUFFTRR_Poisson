@@ -31,12 +31,13 @@ def poisson_solver(f_values, g_values, u_fourier_0,
 
     grid_type:
         1 -> Uniform angular grid in θ (standard FFT).
-        2, 3 -> Shared non-uniform angular grid in θ (NUFFT / NUDFT).
+        2 -> Non-uniform angular grid via Toeplitz PCG with circulant preconditioning (fast, optimal for mildly jittered grids).
+        3 -> Non-uniform angular grid via PCGLS with Pipe & Menon density compensation (robust for strongly clustered/distorted grids).
 
     use_nudft_angular:
         Only used when grid_type in (2, 3) (nonuniform angles).
-        False (default) -> cuFINUFFT + block CG / PCGLS (fast).
-        True            -> direct GPU NUDFT solve.
+        False (default) -> cuFINUFFT iterative solve (Toeplitz PCG for 2, PCGLS for 3).
+        True            -> direct GPU NUDFT solve (QR/SVD, reference).
     """
     # Map legacy azu_unif alias if passed
     if "azu_unif" in kwargs:

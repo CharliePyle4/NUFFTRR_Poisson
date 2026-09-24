@@ -144,7 +144,7 @@ def _nufft_adjoint(x_wrapped, f, N_modes, eps=1e-12):
 
 
 # =============================================================================
-# Direct Unsquared CGLS (Paige & Saunders) on GPU
+# Direct PCGLS (Paige & Saunders) on GPU with Pipe & Menon Density Compensation
 # =============================================================================
 def _compute_pipe_menon_weights(theta: cp.ndarray, n_iter: int = 2, eps: float = 1e-12) -> cp.ndarray:
     """
@@ -178,7 +178,7 @@ def _compute_pipe_menon_weights(theta: cp.ndarray, n_iter: int = 2, eps: float =
     return w_vec.real
 
 
-def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-12, **kwargs):
+def _invert_nufft_pcgls(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-12, **kwargs):
     """
     High-Performance Preconditioned Conjugate Gradient for Least Squares (PCGLS) on GPU.
     Accelerated with CuPy CUDA Graph capture to eliminate Python driver launch overhead.
@@ -251,7 +251,7 @@ def _invert_nufft_cgls_unsquared(theta_j, f_arr, tol=1e-10, maxiter=200, eps=1e-
 
 
 # =============================================================================
-# Normal-Equations Block CG Solver on GPU (grid_type = 2)
+# Normal-Equations Toeplitz PCG Solver on GPU (grid_type = 2)
 # =============================================================================
 def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
     X = B.copy()
@@ -308,16 +308,16 @@ def _block_cg(T_op, B, M_inv=None, tol=1e-8, maxiter=50):
     return X
 
 
-def _invert_nufft_block_cgls_shared(theta_j,
-                                    f,
-                                    tol=1e-8,
-                                    maxiter=50,
-                                    eps=1e-12,
-                                    reg_param=1e-12,
-                                    precond_shift=1e-3,
-                                    kde_oversample=4,
-                                    kde_bandwidth=1.0,
-                                    **kwargs):
+def _invert_nufft_toeplitz_pcg(theta_j,
+                               f,
+                               tol=1e-8,
+                               maxiter=50,
+                               eps=1e-12,
+                               reg_param=1e-12,
+                               precond_shift=1e-3,
+                               kde_oversample=4,
+                               kde_bandwidth=1.0,
+                               **kwargs):
     theta_j = cp.asarray(theta_j, dtype=float)
     f_orig = cp.asarray(f, dtype=cp.complex128)
     N = theta_j.size
@@ -365,7 +365,6 @@ def _invert_nufft_block_cgls_shared(theta_j,
         M_out = cp.fft.ifft(M_hat * eig_c_inv, axis=1)
         return M_out
 
-    # 5. Solve using Block CG (Normal Equations)
     X_T = _block_cg(T_op, B_adj, M_inv=M_inv, tol=tol, maxiter=maxiter)
     X = X_T.T
     return X[:, 0] if f_orig.ndim == 1 else X
@@ -400,6 +399,8 @@ def compute_fourier_coeff_nonunif(f_values: cp.ndarray,
                                   **kwargs) -> cp.ndarray:
     """
     Computes azimuthal Fourier coefficients on non-uniform angular mesh theta_j using GPU (cuFINUFFT/CuPy).
+    Uses Pipe & Menon PCGLS for NUFFT (grid_type=3) or Toeplitz PCG (grid_type=2)
+    or regularized least-squares for NUDFT.
     """
     f_values = cp.asarray(f_values)
     N = f_values.shape[0]
@@ -409,7 +410,7 @@ def compute_fourier_coeff_nonunif(f_values: cp.ndarray,
     if use_nudft:
         coeff_core = _invert_nudft(theta_j, f_values, reg_param=reg_param)
     elif grid_type == 2:
-        coeff_core = _invert_nufft_block_cgls_shared(
+        coeff_core = _invert_nufft_toeplitz_pcg(
             theta_j, f_values,
             tol=tol, maxiter=maxiter, eps=eps,
             reg_param=reg_param,
@@ -419,7 +420,7 @@ def compute_fourier_coeff_nonunif(f_values: cp.ndarray,
             **kwargs
         )
     else:
-        coeff_core = _invert_nufft_cgls_unsquared(
+        coeff_core = _invert_nufft_pcgls(
             theta_j, f_values,
             tol=tol, maxiter=maxiter, eps=eps,
             reg_param=reg_param,
