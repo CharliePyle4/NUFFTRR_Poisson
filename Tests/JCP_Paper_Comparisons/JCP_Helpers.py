@@ -54,11 +54,66 @@ def problem_6_setup():
     u_sym = sp.exp(-50 * ((x - 0.5)**2 + y**2))
     return get_problem_functions(u_sym, x, y)
 
-def setup_problem_7():
-    x, y = sp.symbols('x y')
-    # Test Problem 7: Off-center singularity (logarithmic)
-    u_sym = sp.log((x - 1.1)**2 + (y + 1.1)**2)
-    return get_problem_functions(u_sym, x, y)
+def setup_problem_7(use_paper_smooth_formula=False):
+    """
+    Problem 7 (Borges & Daripa JCP):
+    Discontinuous boundary conditions on the unit disk B(0; 1):
+      Delta u = f in B(0; 1)
+      u = g on d B
+    where:
+      f(x, y) = -4*(x**2*y + y**3)*sin(1 - x**2 - y**2) - 8*y*cos(1 - x**2 - y**2)
+      g(e^{i*alpha}) = 0 for alpha in (0, pi), 1 for alpha in (pi, 2*pi), 1/2 for alpha in {0, pi, 2*pi}
+    Exact solution:
+      u(x, y) = 1/2 + y*sin(1 - x**2 - y**2) - (2/pi)*harmonic
+      where harmonic = sum_{k=1}^infty r^{2k-1}*sin((2k-1)*alpha)/(2k-1)
+                     = 0.5 * atan2(2*y, 1 - x**2 - y**2)
+    """
+    def u(x, y):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        r2 = x**2 + y**2
+        r = np.sqrt(r2)
+        alpha = np.arctan2(y, x) % (2.0 * np.pi)
+
+        if use_paper_smooth_formula:
+            smooth_part = np.sin(y * (1.0 - r2))
+        else:
+            smooth_part = y * np.sin(1.0 - r2)
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            harmonic = 0.5 * np.arctan2(2.0 * y, 1.0 - r2)
+            at_b = np.isclose(r, 1.0, atol=1e-12)
+            b_val = np.where(
+                np.isclose(alpha, 0.0) | np.isclose(alpha, np.pi) | np.isclose(alpha, 2.0 * np.pi),
+                0.0,
+                np.where((alpha > 0.0) & (alpha < np.pi), np.pi / 4.0, -np.pi / 4.0)
+            )
+            harmonic = np.where(at_b, b_val, harmonic)
+
+        return 0.5 + smooth_part - (2.0 / np.pi) * harmonic
+
+    def f(x, y):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        r2 = x**2 + y**2
+        return -4.0 * (x**2 * y + y**3) * np.sin(1.0 - r2) - 8.0 * y * np.cos(1.0 - r2)
+
+    def g_dirichlet(x, y):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        alpha = np.arctan2(y, x) % (2.0 * np.pi)
+        return np.where(
+            np.isclose(alpha, 0.0) | np.isclose(alpha, np.pi) | np.isclose(alpha, 2.0 * np.pi),
+            0.5,
+            np.where((alpha > 0.0) & (alpha < np.pi), 0.0, 1.0)
+        )
+
+    def g_neumann(x, y, R):
+        return np.zeros_like(x)
+
+    return u, f, g_dirichlet, g_neumann
+
+problem_7_setup = setup_problem_7
 
 def get_cached_angle_mesh(method_cfg, N, M):
     azu_unif = method_cfg["azu_unif"]
@@ -218,6 +273,108 @@ def run_table_1(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MA
                 table1_results.append(res)
     return pd.DataFrame(table1_results)
 
+
+def run_table_10(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, mask_radius=0.01, **kwargs):
+    """
+    Run Table X for Problem 7:
+    Relative errors in norm ||·||_∞ evaluated over B(0; 1) - (B_{mask_radius}(1, 0) U B_{mask_radius}(-1, 0)).
+    """
+    table10_results = []
+    for method in methods:
+        for N in N_values:
+            for M in M_values:
+                start_time = time.perf_counter()
+                x_coord, y_coord, u_approx, u_true = solve_for_grids(
+                    N=N, M=M, method_cfg=method, bc_name="dirichlet", quad_name="trapezoidal",
+                    u=u, f=f, g_dirichlet=g_dirichlet, g_neumann=g_neumann,
+                    BC_MAP=BC_MAP, QUAD_MAP=QUAD_MAP, rad_unif=rad_unif, R=R,
+                    **kwargs
+                )
+                solve_time = time.perf_counter() - start_time
+                err = np.abs(u_approx - u_true)
+
+                # Standard error metrics
+                iRadius = build_radial_mesh(M, rad_unif, R)
+                iAngle = get_cached_angle_mesh(method, N, M)
+                _, linf_rel, _, l2_rel = compute_error_metrics(u_approx, u_true, iRadius, iAngle)
+
+                # Masked error excluding points within mask_radius of (1, 0) and (-1, 0)
+                dist_p1 = np.sqrt((x_coord - 1.0)**2 + y_coord**2)
+                dist_m1 = np.sqrt((x_coord + 1.0)**2 + y_coord**2)
+                valid = (dist_p1 >= mask_radius) & (dist_m1 >= mask_radius)
+                u_max_valid = np.max(np.abs(u_true[valid]))
+                linf_rel_masked = np.max(err[valid]) / u_max_valid if u_max_valid > 0 else np.max(err[valid])
+
+                table10_results.append({
+                    "method": method["name"],
+                    "label": method["label"],
+                    "N": N,
+                    "M": M,
+                    "bc": "dirichlet",
+                    "quad": "trapezoidal",
+                    "L_inf_rel": linf_rel,
+                    "L_inf_rel_masked": linf_rel_masked,
+                    "L2_rel": l2_rel,
+                    "time": solve_time,
+                })
+    return pd.DataFrame(table10_results)
+
+
+def display_table_10(df_table10, methods, N_values, M_values, value_col="L_inf_rel_masked"):
+    """
+    Display Table X for Problem 7: Relative Errors in Norm ||·||_∞.
+    """
+    def dash_if_nan(x):
+        return "—" if pd.isna(x) else f"{x:.1e}"
+
+    for method in methods:
+        name = method["name"]
+        print(f"\n{'='*80}\n{method['label']} : TABLE X (Problem 7 - Relative Errors in Norm ||.||_inf)\n{'='*80}")
+        display(df_table10[df_table10["method"] == name].pivot(index="N", columns="M", values=value_col).reindex(index=N_values, columns=M_values).map(dash_if_nan))
+
+
+def plot_problem_7_1d_section(solutions_dict, R=1.0, figsize=(14, 5)):
+    """
+    Plot Figure 15: Errors on the 1D section from (0, -1) to (0, 1).
+    (a) Linear plot showing convergence as N increases (64, 128, 256).
+    (b) Log-scaling plot showing convergence rate.
+
+    solutions_dict: dict mapping N -> (x_coord, y_coord, u_approx, u_true)
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+
+    for N in sorted(solutions_dict.keys()):
+        x_c, y_c, u_app, u_tr = solutions_dict[N]
+        err = np.abs(u_tr - u_app.real if np.iscomplexobj(u_app) else u_tr - u_app)
+        M = x_c.shape[1]
+        r_m = np.linspace(0, R, M)
+
+        # Segment from (0, -1) to (0, 1):
+        # theta = 3*pi/2 for s in [-1, 0] (j = 3*N//4)
+        # theta = pi/2 for s in [0, 1] (j = N//4)
+        s_coords = np.concatenate([-r_m[::-1], r_m[1:]])
+        err_slice = np.concatenate([err[3 * N // 4, :][::-1], err[N // 4, 1:]])
+
+        ax1.plot(s_coords, err_slice, label=f"N = {N}", linewidth=1.5)
+        ax2.plot(s_coords, np.maximum(err_slice, 1e-16), label=f"N = {N}", linewidth=1.5)
+
+    ax1.set_xlabel("Radial position", fontsize=11)
+    ax1.set_ylabel("Error", fontsize=11)
+    ax1.set_title("(a) Convergence as Fourier coefficients increase (Linear)", fontsize=11)
+    ax1.grid(True, linestyle="--", alpha=0.6)
+    ax1.legend(fontsize=10)
+
+    ax2.set_xlabel("Radial position", fontsize=11)
+    ax2.set_ylabel("Error (log scale)", fontsize=11)
+    ax2.set_yscale("log")
+    ax2.set_title("(b) Errors observed in log-scaling", fontsize=11)
+    ax2.grid(True, linestyle="--", alpha=0.6)
+    ax2.legend(fontsize=10)
+
+    plt.suptitle("Figure 15: Problem 7—Errors along the one-dimensional section from (0, -1) to (0, 1)", fontsize=13)
+    plt.tight_layout()
+    plt.show()
+
 def run_table_2(methods, N_fixed, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, **kwargs):
     table2_results = []
     for method in methods:
@@ -290,12 +447,6 @@ def setup_problem_6():
     phi_x = sp.exp(-100 * (x - 0.5)**2) * (x**2 - x)
     phi_y = sp.exp(-100 * (y - 0.5)**2) * (y**2 - y)
     u_sym = 10 * phi_x * phi_y
-    return get_problem_functions(u_sym, x, y)
-
-def setup_problem_7():
-    # Generic setup pattern for Problem 7
-    x, y = sp.symbols('x y')
-    u_sym = sp.cos(10 * sp.pi * x) * sp.cos(10 * sp.pi * y)
     return get_problem_functions(u_sym, x, y)
 
 def run_timing_analysis(methods, N_values, M_values, u, f, g_dirichlet, g_neumann, BC_MAP, QUAD_MAP, rad_unif, R, **kwargs):
